@@ -858,9 +858,16 @@ def is_skill_description_truncated_for_prompt(frontmatter: dict[str, Any]) -> bo
 
 def iter_skill_index_files(skills_dir: Path, filename: str):
     """Walk skills_dir yielding sorted paths matching *filename*; prunes
-    EXCLUDED_SKILL_DIRS and support dirs of skill roots."""
+    EXCLUDED_SKILL_DIRS and support dirs of skill roots. Tracks realpaths so
+    ``followlinks=True`` cannot loop on cyclic symlinks."""
     matches: list[str] = []
+    visited: set[str] = set()
     for root, dirs, files in os.walk(str(skills_dir), followlinks=True):
+        real_root = os.path.realpath(root)
+        if real_root in visited:
+            dirs.clear()
+            continue
+        visited.add(real_root)
         has_skill_md = "SKILL.md" in files
         dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
         if filename in files:
