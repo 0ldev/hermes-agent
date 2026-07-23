@@ -66,6 +66,7 @@ import { useComposerDraft } from './hooks/use-composer-draft'
 import { useComposerDrop } from './hooks/use-composer-drop'
 import { useComposerEscCancel } from './hooks/use-composer-esc-cancel'
 import { useComposerMetrics } from './hooks/use-composer-metrics'
+import { useComposerGhost } from './hooks/use-composer-ghost'
 import { useComposerPlaceholder } from './hooks/use-composer-placeholder'
 import { useComposerPopout } from './hooks/use-composer-popout'
 import { useComposerQueue } from './hooks/use-composer-queue'
@@ -434,6 +435,16 @@ export function ChatBar({
   // conversation change.
   const placeholder = useComposerPlaceholder({ disabled, reconnecting, sessionId })
 
+  // Ghost-text reply suggestion: after a turn completes and the composer is
+  // empty, the top `complete.suggest` candidate rides the placeholder slot
+  // (`data-placeholder`) as dim text. Tab accepts it; typing/new-turn clears
+  // it; Esc dismisses. Keydown handling lives in `handleEditorKeyDown`.
+  const {
+    acceptGhost,
+    dismissGhost,
+    ghost
+  } = useComposerGhost({ busy, empty: !hasText, gateway: gateway ?? null, sessionId: sessionId ?? null })
+
   // Trigger / completion engine: @// detection, the adapter-driven item list,
   // popover selection, and chip insertion. The keydown nav block below consumes
   // this API; keyup uses triggerKeyConsumedRef to skip its refresh.
@@ -703,6 +714,31 @@ export function ChatBar({
       redo()
 
       return
+    }
+
+    // Ghost-text reply suggestion. Only when NO completion trigger is open
+    // (an active `/`/`@` drawer owns Tab/Escape below) and the composer is
+    // empty with a ghost showing. Tab accepts it into real text — the
+    // preventDefault is what stops Tab escaping focus to the model picker,
+    // the exact bug this fixes. Esc waves it off until the next turn.
+    if (!trigger && ghost) {
+      if (event.key === 'Tab' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const accepted = acceptGhost()
+
+        if (accepted) {
+          event.preventDefault()
+          setComposerText(accepted)
+          requestMainFocus()
+
+          return
+        }
+      }
+
+      if (event.key === 'Escape' && dismissGhost()) {
+        event.preventDefault()
+
+        return
+      }
     }
 
     // Plain Backspace right after a directive chip: remove the chip + its
@@ -1155,7 +1191,7 @@ export function ChatBar({
           hudNativeDrag && '[-webkit-app-region:no-drag]'
         )}
         contentEditable={!inputDisabled}
-        data-placeholder={placeholder}
+        data-placeholder={ghost || placeholder}
         data-slot={RICH_INPUT_SLOT}
         dir={textDirection}
         onBeforeInput={handleEditorBeforeInput}
