@@ -76,12 +76,25 @@ def _utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
 
 
+def _resolve_hook_cwd(kwargs: dict[str, Any]) -> str:
+    """Payload ``cwd`` via the same ladder file tools use (session record, workspace override,
+    absolute ``$TERMINAL_CWD``), so hooks and file tools agree; process cwd as a last resort."""
+    task_id = str(kwargs.get("task_id") or "default")
+    try:
+        from tools.file_tools import _resolve_base_dir
+
+        return str(_resolve_base_dir(task_id))
+    except Exception as exc:
+        logger.debug("shell hook cwd ladder unavailable (%s) — using process cwd", exc)
+    try:
+        return str(Path.cwd())
+    except OSError:
+        return ""
+
+
 def _payload_fields(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Common stdin/POST payload fields (shared with outbound webhooks); key order is wire order."""
-    try:
-        cwd = str(Path.cwd())
-    except OSError:
-        cwd = ""
+    cwd = _resolve_hook_cwd(kwargs)
     from hermes_cli.profiles import get_active_profile_name
     return {
         "tool_name": kwargs.get("tool_name"),
