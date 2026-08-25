@@ -293,6 +293,10 @@ _RAW_INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
         callback=lambda agent, ctx: getattr(agent, "setup_choose_callback", None),
         session_id=lambda agent, ctx: getattr(agent, "session_id", None),
     ),
+    "workflow": _callback_tool(
+        "tools.workflow_tools", "workflow_tool", "workflow_callback",
+        ("action", "action", ""), ("ops", "ops"), ("workflow", "workflow"), ("scenario", "scenario"),
+    ),
     "manage_connections": _manage_connections,
     "manage_catalog": _manage_catalog,
     "setup_mcp": _setup_mcp_shim,

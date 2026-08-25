@@ -4597,6 +4597,12 @@ export interface TourStep {
 }
 /** Which built-in tour ``start`` without steps runs. */
 export type TourPreset = 'quick' | 'full'
+/** ``tools/workflow_tools.py`` field set. ``ops``/``scenario`` are plugin-defined (the op vocabulary is owned by the Workflows plugin and read back through ``action='read'``), so they stay open here. */
+export interface WorkflowRequestParams {
+  session_id: string
+  action: string
+  [key: string]: unknown
+}
 export interface DisplayInstallSudoParams {
   session_id: string
   profile_key: string
@@ -5858,6 +5864,8 @@ export interface ServerRequestMap {
   'vault.unlock_prompt': { params: VaultUnlockRequestParams; result: ValueResult }
   /** Enumerate the native window below the app (JSON text answer). */
   'window.read': { params: EmptyRequestParams; result: ValueResult }
+  /** Read or edit the workflow graph on the Workflows canvas (JSON text answer). */
+  workflow: { params: WorkflowRequestParams; result: ValueResult }
 }
 export type ServerRequestMethod = keyof ServerRequestMap
 export const SERVER_REQUEST_METHODS = [
@@ -5874,7 +5882,8 @@ export const SERVER_REQUEST_METHODS = [
   'vault.code',
   'vault.save_login',
   'vault.unlock_prompt',
-  'window.read'
+  'window.read',
+  'workflow'
 ] as const satisfies readonly ServerRequestMethod[]
 
 // ── Notifications (`event` frames) ──
