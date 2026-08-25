@@ -23,6 +23,7 @@ import {
   setTurnStartedAt,
   setYoloActive
 } from '@/store/session'
+import { isDetachedSession } from '@/store/detached-sessions'
 import {
   $parkedTileStoredIds,
   $sessionStates,
@@ -127,6 +128,9 @@ export function useSessionStateCache({
       isReferenced: (runtimeId, state) =>
         runtimeId === activeSessionIdRef.current ||
         state.storedSessionId === selectedStoredSessionIdRef.current ||
+        // A chat mounted inside another surface (the Workflows canvas) is none
+        // of the above and would otherwise be evicted while still on screen.
+        isDetachedSession(runtimeId, state.storedSessionId) ||
         $sessionTiles
           .get()
           .some(
