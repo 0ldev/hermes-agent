@@ -85,9 +85,12 @@ def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
                       f"'{server_name}'. The command was NOT run. Do not retry without explicit user direction.")
 
 
-def _check_circuit_breaker(server_name: str) -> Optional[str]:
+def _check_circuit_breaker(server_name: str, tool_name: Optional[str] = None) -> Optional[str]:
     """Open-breaker error, or None when calls may proceed. After the cooldown the breaker is
-    half-open: the next call probes; success resets, failure re-bumps and re-arms the cooldown."""
+    half-open: the next call probes; success resets, failure re-bumps and re-arms the cooldown.
+    An open state reached on application strikes only (the server answered every time) blocks the
+    tool whose rejections tripped it, not the whole server (#47851): the transport is healthy and
+    the model's recovery route via this server's other tools must stay open."""
     from tools.mcp_tool_scope import _resolve_server_key
     key = _resolve_server_key(server_name)
     failures = _core._server_error_counts.get(key, 0)
@@ -96,11 +99,15 @@ def _check_circuit_breaker(server_name: str) -> Optional[str]:
         return None
     retry_in = max(1, int(_core._CIRCUIT_BREAKER_COOLDOWN_SEC - age))
     if _core._server_errors_all_application.get(key):
+        blocked_tool = _core._server_breaker_application_tool.get(key)
+        if blocked_tool and tool_name is not None and tool_name != blocked_tool:
+            return None
         # The server answered every time; the calls were rejected. Calling it "unreachable" sent the
         # model to the user instead of to its own arguments (#11113).
-        return tool_error(f"MCP server '{server_name}' rejected the last {failures} calls (it is reachable; see the "
-                          f"error text those calls returned). Paused for ~{retry_in}s. Do NOT repeat the same call — "
-                          f"fix the arguments/URL/target or use a different approach.")
+        who = f"to MCP tool '{tool_name}' on server '{server_name}'" if tool_name else f"to MCP server '{server_name}'"
+        return tool_error(f"The last {failures} calls {who} were rejected (the server is reachable; see the "
+                          f"error text those calls returned). This tool is paused for ~{retry_in}s. Do NOT repeat "
+                          f"the same call — fix the arguments/URL/target, or use a different tool on this server.")
     return tool_error(f"MCP server '{server_name}' is unreachable after {failures} consecutive failures. "
                       f"Auto-retry available in ~{retry_in}s. Do NOT retry "
                       f"this tool yet — use alternative approaches or ask the user to check the MCP server.")
@@ -147,11 +154,12 @@ def _result_is_error(result) -> bool:
         return False
 
 
-def _record_call_outcome(server_name: str, result) -> Any:
+def _record_call_outcome(server_name: str, result, tool_name: Optional[str] = None) -> Any:
     """Breaker bookkeeping: an error payload from the tool itself still counts as a strike (#10447),
-    flagged as an application error so the open-breaker message stays truthful."""
+    flagged as an application error so the open-breaker message stays truthful and scoped to the
+    rejected tool (#47851)."""
     if _result_is_error(result):
-        _core._bump_server_error(server_name, application=True)
+        _core._bump_server_error(server_name, application=True, tool_name=tool_name)
     else:
         _core._reset_server_error(server_name)
     return result
@@ -325,11 +333,13 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
 
 
 def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float, recoverers,
-              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False) -> str:
+              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False,
+              tool_name: Optional[str] = None) -> str:
     """Mark the call started on *server* (doubles may lack ``mark_tool_call``), run coroutine function *call*
     on the MCP loop and, on failure, walk ``recoverers`` (``(server_name, exc, retry_call, op) -> Optional[str]``,
     None = not its kind; order matters). Unrecovered exceptions go through ``on_final_failure`` and become the
-    generic call-failed error. ``record_outcome`` applies breaker bookkeeping to the FIRST attempt only."""
+    generic call-failed error. ``record_outcome`` applies breaker bookkeeping to the FIRST attempt only;
+    ``tool_name`` scopes an application-strike breaker opening to that tool (#47851)."""
     if callable(getattr(server, "mark_tool_call", None)):
         server.mark_tool_call()
 
@@ -338,7 +348,7 @@ def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float,
 
     try:
         result = call_once()
-        return _record_call_outcome(server_name, result) if record_outcome else result
+        return _record_call_outcome(server_name, result, tool_name) if record_outcome else result
     except InterruptedError:
         return tool_error("MCP call interrupted: user sent a new message")
     except Exception as exc:
@@ -572,7 +582,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
 
     def _handler(args: dict, **kwargs) -> Any:
         # Security boundary: untrusted-server write tools need approval before ANY transport work (incl. lazy spawn).
-        error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name)
+        error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name, tool_name)
         if error is not None:
             return error
         server, error = _acquire_call_server(server_name, tool_timeout)
@@ -602,7 +612,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         text = _dispatch(
             server_name, server, op, _call, tool_timeout,
             (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired),
-            _on_failure, record_outcome=True)
+            _on_failure, record_outcome=True, tool_name=tool_name)
         # Off the MCP loop on purpose: image prep is CPU work (bounded vision pool) that must not stall other servers' I/O.
         return _mcp_result_with_native_images(text, image_paths) if native_images and not _result_is_error(text) else text
     return _handler
