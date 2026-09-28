@@ -42,6 +42,7 @@ import type { ClientSessionState } from '../../../types'
 import {
   collapseDuplicateFinalAfterToolInterim,
   collapseDuplicateFinalOntoIdenticalInterim,
+  collapseLiveTwinOfPersistedFinal,
   type DuplicateFinalCollapse,
   identicalInterimSiblingIndex
 } from './collapse-duplicate-final'
@@ -790,9 +791,14 @@ export function useMessageStream({
             : mergeCurrentResponseText(parts, visibleFinalText, occurredAt)
         }
 
+        const receiptFinalRowId = persistedTurn?.final_assistant_row_id
+
+        const finalRowId =
+          typeof receiptFinalRowId === 'number' && Number.isSafeInteger(receiptFinalRowId) && receiptFinalRowId > 0
+            ? receiptFinalRowId
+            : null
+
         const withPersistedIdentity = (message: ChatMessage): ChatMessage => {
-          const finalRowId = persistedTurn?.final_assistant_row_id
-          const hasFinalRow = typeof finalRowId === 'number' && Number.isSafeInteger(finalRowId) && finalRowId > 0
           const finalPartIndex = message.parts.findLastIndex(part => part.type === 'text')
 
           return {
@@ -801,7 +807,7 @@ export function useMessageStream({
             persistedTurn: persistedTurn ?? undefined,
             // A folded bubble can already address its first source row. Keep
             // that address and bind the final response's exact source as well.
-            ...(hasFinalRow
+            ...(finalRowId !== null
               ? {
                   rowId: message.rowId ?? finalRowId,
                   parts: message.parts.map((part, index) =>
@@ -891,6 +897,11 @@ export function useMessageStream({
 
         if (streamIndex >= 0) {
           collapsed =
+            collapseLiveTwinOfPersistedFinal(prev, streamIndex, {
+              completeMessage,
+              finalRowId: hasFailure ? null : finalRowId,
+              lastUserIndex
+            }) ??
             collapseDuplicateFinalAfterToolInterim(prev, streamIndex, {
               completeMessage,
               finalText,
@@ -950,14 +961,7 @@ export function useMessageStream({
             // interim instead of painting a second bubble for one row
             // (#124128). A frame with no receipt keeps the rules below, so a
             // genuinely distinct reply still appends its own bubble.
-            const finalRowId = persistedTurn?.final_assistant_row_id
-
-            const settlesPersistedRow =
-              existing.interim === true &&
-              existing.rowId === undefined &&
-              typeof finalRowId === 'number' &&
-              Number.isSafeInteger(finalRowId) &&
-              finalRowId > 0
+            const settlesPersistedRow = existing.interim === true && existing.rowId === undefined && finalRowId !== null
 
             if (
               existing.pending ||
