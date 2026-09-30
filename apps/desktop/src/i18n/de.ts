@@ -2788,6 +2788,7 @@ export const deOverrides = {
       status: 'Status',
       started: 'Start',
       duration: 'Dauer',
+      firstToken: 'Erstes Token',
       model: 'Modell',
       tokensIn: 'Tokens ein',
       tokensOut: 'Tokens aus',
@@ -2798,6 +2799,7 @@ export const deOverrides = {
       source: 'Quelle',
       session: 'Sitzung',
       input: 'Eingabe',
+      thinking: 'Denken',
       output: 'Ausgabe'
     }
   },

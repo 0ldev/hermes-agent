@@ -2180,6 +2180,7 @@ export interface Translations extends NoticeTranslations {
       status: string
       started: string
       duration: string
+      firstToken: string
       model: string
       tokensIn: string
       tokensOut: string
@@ -2190,6 +2191,7 @@ export interface Translations extends NoticeTranslations {
       source: string
       session: string
       input: string
+      thinking: string
       output: string
     }
   }

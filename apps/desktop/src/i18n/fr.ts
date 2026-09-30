@@ -2798,6 +2798,7 @@ export const frOverrides = {
       status: 'statut',
       started: 'début',
       duration: 'durée',
+      firstToken: 'premier jeton',
       model: 'modèle',
       tokensIn: 'jetons entrée',
       tokensOut: 'jetons sortie',
@@ -2808,6 +2809,7 @@ export const frOverrides = {
       source: 'source',
       session: 'session',
       input: 'entrée',
+      thinking: 'réflexion',
       output: 'sortie'
     }
   },
