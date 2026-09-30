@@ -671,6 +671,11 @@ class WebhookAdapter(BasePlatformAdapter):
             logger.info("[webhook] filtered event=%s route=%s", event_type, route_name)
             return web.json_response({"status": "ignored", "reason": "filter", "route": route_name})
 
+        # A workflow route answers only to its workflow: it accepts an
+        # unsigned POST (the unguessable URL is the credential) and 404s
+        # rather than falling through to the generic agent dispatch.
+        workflow_route = _is_workflow_route(route_name, route_config)
+
         workflow_id = ""
         try:
             from workflow.triggers import workflow_id_for_route
