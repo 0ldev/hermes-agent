@@ -31,7 +31,7 @@ import { clearPetMessages, type PetSayOptions, sayPetMessage } from '@/store/pet
 import { type GatewayEventListener, onGatewayEvent } from './events'
 import { $pluginRecords } from './plugins-store'
 import { registry } from './registry'
-import { type PluginServerRequestHandler, onPluginServerRequest } from './server-request-tap'
+import { onPluginServerRequest, type PluginServerRequestHandler } from './server-request-tap'
 import { type PluginSettingsPage, settingsPageContribution } from './settings-pages'
 
 export type { PluginSettingsPage, PluginSettingsSubpage } from './settings-pages'
