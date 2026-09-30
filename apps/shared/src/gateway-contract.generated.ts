@@ -4458,6 +4458,17 @@ export interface PluginCatalogLookupEntry {
   sha: string
   subdir: string
 }
+/** ``session_id`` is a live gateway session id or a stored session id; a live one is also subscribed, so its ``trace.event`` frames start flowing. */
+export interface TraceEventsParams {
+  session_id: string
+  profile?: string | null
+}
+export interface TraceEventsResult {
+  session_id: string
+  events?: unknown[]
+  truncated?: boolean
+  recording?: boolean
+}
 /** ``answers`` rides only on a reconnect replay (locks the server already accepted; null = skipped). */
 export interface ClarifyRequestParams {
   session_id: string
@@ -5028,6 +5039,11 @@ export interface PetHatchProgressPayload {
 }
 /** ``change_watcher._CHANGE_WATCHES`` payload fn — ``{}`` for every watch except pet.changed. */
 export type ChangeSignalPayload = Record<string, unknown>
+/** ``methods_trace._forward_trace_event`` — one Relay event recorded for a watched session. */
+export interface TraceEventPayload {
+  trace_session_id: string
+  event: unknown
+}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY' | 'ALIAS_TAKEN'
 
 // ── Client→server methods ──
@@ -5510,6 +5526,8 @@ export interface RpcMethods {
   'tools.show': { params: _SessionScoped; result: ToolsShowResult }
   /** Toolset summaries (no tool names) for the desktop Toolsets tab. */
   'toolsets.list': { params: _SessionScoped; result: ToolsetsListResult }
+  /** Recorded Relay events for one session and its subagents, oldest first. */
+  'trace.events': { params: TraceEventsParams; result: TraceEventsResult }
   /** Two-bar dollar usage view shared by /usage, /topup and /subscription; fail-open to unavailable. */
   'usage.bars': { params: ProfileParams; result: UsageModel }
   /** Add a login / payment / address item to the local vault. */
@@ -5790,6 +5808,7 @@ export const RPC_METHODS = [
   'tools.list',
   'tools.show',
   'toolsets.list',
+  'trace.events',
   'usage.bars',
   'vault.add',
   'vault.list',
@@ -6004,6 +6023,8 @@ export interface BackendGatewayEventMap {
   'tool.output_risk': ToolOutputRiskPayload
   /** A tool call began (stable id + full args). */
   'tool.start': ToolStartPayload
+  /** A Relay event recorded live for a session a client is tracing. */
+  'trace.event': TraceEventPayload
   /** Barge-in: the spoken interjection interrupted the turn; no payload. */
   'voice.interrupted': Record<string, never>
   /** Live STT text so far while the user is still speaking. */
@@ -6089,6 +6110,7 @@ export const GATEWAY_EVENT_TYPES = [
   'tool.generating',
   'tool.output_risk',
   'tool.start',
+  'trace.event',
   'voice.interrupted',
   'voice.partial',
   'voice.status',
