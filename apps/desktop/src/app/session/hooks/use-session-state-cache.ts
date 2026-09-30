@@ -24,7 +24,6 @@ import {
   setTurnStartedAt,
   setYoloActive
 } from '@/store/session'
-import { isDetachedSession } from '@/store/detached-sessions'
 import {
   $parkedTileStoredIds,
   $sessionStates,

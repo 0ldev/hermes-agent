@@ -14,10 +14,12 @@ import {
 import { readActiveTerminal } from '@/app/right-sidebar/terminal/buffer'
 import { pendingClarifyToolPayload } from '@/app/session/hooks/use-session-actions/restore-pending-clarify'
 import { translateNow } from '@/i18n'
+import { dispatchPluginServerRequest, pluginWantsServerRequest } from '@/contrib/server-request-tap'
 import { restorePendingClarifyToolCall } from '@/lib/chat-messages'
 import type { PreviewActAction } from '@/lib/preview-act/act-in-page'
 import type { TourAction, TourStep } from '@/lib/tour'
 import { type ClarifyRequest, normalizeQuestions, normalizeSetupChoose, setClarifyRequest } from '@/store/clarify'
+import { isDetachedSession } from '@/store/detached-sessions'
 import type { ScopedServerRequest } from '@/store/gateway'
 import { dispatchNativeNotification } from '@/store/native-notifications'
 import type { PreviewOwner } from '@/store/preview-ownership'
@@ -238,11 +240,17 @@ export function previewSessionRoute({
   }
 
   // window.read routes through the tolerant claim (see windowReadClaimsSession);
-  // every other window-owned request keeps the strict host check.
+  // every other window-owned request keeps the strict host check — except
+  // tour, where a detached chat (the Workflows canvas) counts as on screen:
+  // its claim exists exactly while its surface is mounted in front of the
+  // user, and its whole reason for touring is to walk them around the page
+  // it lives on. The runtime id the request names is the id the surface
+  // claimed on resume, so a direct hit needs no aliasing.
   if (
     method === 'window.read'
       ? windowReadClaimsSession(sessionId, activeSessionId)
-      : windowHostsSession(sessionId, activeSessionId, storedIdForRuntimeId)
+      : windowHostsSession(sessionId, activeSessionId, storedIdForRuntimeId) ||
+        (method === 'tour' && isDetachedSession(sessionId))
   ) {
     return 'run'
   }
@@ -636,8 +644,12 @@ const NOT_ACTIVE_TOUR_ERROR = 'Tours only run in the session the user is looking
 
 const tour: Handler = ({ deps, isActiveSession, request, sessionId }) => {
   // tour tool: one guided-tour action via driver.js, app DOM or preview guest
-  // page. Active session only, same window-ownership rule as preview.act
-  // (WINDOW_OWNED_REQUESTS).
+  // page. On-screen sessions only, same window-ownership rule as preview.act
+  // (WINDOW_OWNED_REQUESTS) — where "on screen" is the active session OR a
+  // detached chat on this window (the Workflows canvas): a detached surface's
+  // claim exists exactly while it is mounted in front of the user, and a
+  // background turn must never paint overlays on the user's screen
+  // (desktop AGENTS.md: offer, don't hijack).
   const p = request.params
 
   if (!$toursEnabled.get()) {
@@ -648,7 +660,7 @@ const tour: Handler = ({ deps, isActiveSession, request, sessionId }) => {
     return
   }
 
-  if (!isActiveSession) {
+  if (!isActiveSession && !isDetachedSession(sessionId)) {
     answerValue(request, { error: NOT_ACTIVE_TOUR_ERROR, success: false })
 
     return
@@ -722,6 +734,14 @@ export function handleServerRequest(
   const handler = SERVER_REQUEST_HANDLERS[request.method]
 
   if (!handler) {
+    // A plugin may own this method (the Workflows canvas answers `workflow`
+    // through the SDK's server-request tap). It claims and answers by itself;
+    // false falls through to the channel's -32601 so the backend never waits
+    // out its deadline against a client that cannot answer.
+    if (pluginWantsServerRequest(request.method)) {
+      return dispatchPluginServerRequest(request)
+    }
+
     return false
   }
 

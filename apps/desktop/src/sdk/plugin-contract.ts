@@ -14,6 +14,7 @@ export type {
   PluginPet,
   PluginRestOptions,
   PluginRunActionResult,
+  PluginServerRequestHandler,
   PluginSettingsPage,
   PluginSettingsSubpage,
   PluginStorage

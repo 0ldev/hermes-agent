@@ -44,6 +44,7 @@ import {
   type WorkspaceNewSessionTarget
 } from '@/components/pane-shell/workspace-scope'
 import { onGatewayEvent } from '@/contrib/events'
+import { onPluginServerRequest } from '@/contrib/server-request-tap'
 import { registry } from '@/contrib/registry'
 import type { WorkspaceMode } from '@/contrib/types'
 import { deleteProfile, getLogs, getStatus, hermesApi, type HermesGateway } from '@/hermes'
@@ -1466,6 +1467,15 @@ export const host = {
    *  yours to wire to `ctx.onDispose` — or use `ctx.onEvent`, which is
    *  tracked wherever it is called. */
   onEvent: onGatewayEvent,
+
+  /** ANSWER a backend request method the app has no built-in for (the
+   *  server-request sibling of `onEvent`). The handler gets the same scoped
+   *  request a built-in does; return `true` to claim it, `false`/`undefined`
+   *  to pass. Claiming means answering — `request.respond` or `request.fail`
+   *  — the backend blocks on it. The returned disposer unregisters; a call
+   *  made while a plugin's `register()` runs is retired with the plugin on
+   *  unload/reload/disable. */
+  onServerRequest: onPluginServerRequest,
 
   /** Restart the backend gateway (progress surfaces in the core statusbar). */
   restartGateway: async () => runGatewayRestart(),
