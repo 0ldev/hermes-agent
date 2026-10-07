@@ -15,7 +15,7 @@ import zlib
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone, UTC
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from hermes_constants import (
     LOCAL_RUNTIME_ROOT_DIRS, _get_platform_default_hermes_home, get_default_hermes_root, get_hermes_home,
@@ -27,7 +27,7 @@ from hermes_state_holders import read_only_db_uri
 from agent.provider_media import GENERATED_SUBDIR
 from hermes_cli.archive_safe import normalize_archive_parts
 from hermes_cli.backup_sqlite import _close_quietly, _safe_copy_db
-from hermes_cli.config_backend import require_file_tooling
+from hermes_cli.config_backend import require_file_tooling, supports_file_tooling
 from hermes_cli.home_data_layout import PM_RUNTIME_ROOT_DIRS, profile_root_entry
 from hermes_cli.sizefmt import format_bytes as _format_size
 
@@ -1250,6 +1250,13 @@ def create_quick_snapshot(
         )
 
 
+def _snapshot_state_files(files: Iterable[str]) -> list[str]:
+    """The state files a quick snapshot saves or restores. Under a config backend that is not a
+    local file, config.yaml is left out both ways: a leftover local copy is not the config, and
+    restoring one would not change it."""
+    return [rel for rel in files if rel != "config.yaml" or supports_file_tooling()]
+
+
 def _create_quick_snapshot_locked(
     label: Optional[str] = None,
     hermes_home: Optional[Path] = None,
@@ -1323,7 +1330,7 @@ def _create_quick_snapshot_locked(
     # recoverable database.
     oversized_skipped: list[str] = []
 
-    for rel in _QUICK_STATE_FILES:
+    for rel in _snapshot_state_files(_QUICK_STATE_FILES):
         src = home / rel
         if not src.exists():
             continue
@@ -1544,7 +1551,6 @@ def restore_quick_snapshot(
     Returns True if at least one file was restored and the listed auth.json
     was not refused or skipped.
     """
-    require_file_tooling("Snapshot restore")
     from gateway.runtime_ownership import OwnershipConflict, exclusive_maintenance
     home = hermes_home or get_hermes_home()
     try:
@@ -1642,20 +1648,21 @@ def _restore_quick_snapshot_exclusive(snapshot_id: str, home: Path) -> bool:
                 return None
         return src, dst
 
+    files = _snapshot_state_files(meta.get("files", {}))
     homes = {home}
-    for rel in meta.get("files", {}):
+    for rel in files:
         entry = _entry_paths(rel)
         if entry and entry[1].suffix == ".db":
             homes.update([entry[1].absolute().parent, entry[1].resolve().parent])
     with exclusive_maintenance(homes):
         # Epoch safety is a whole-profile preflight: copying config first would
         # both partially roll back the profile and report a refused DB as success.
-        if not _snapshot_epochs_restorable(meta.get("files", {}), _entry_paths):
+        if not _snapshot_epochs_restorable(files, _entry_paths):
             return False
 
         restored = 0
         auth_restore_failed = False
-        for rel in meta.get("files", {}):
+        for rel in files:
             entry = _entry_paths(rel)
             if entry is None:
                 logger.error("Manifest path traversal blocked: %s", rel)
