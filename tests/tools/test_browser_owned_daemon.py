@@ -63,7 +63,8 @@ def session(tmp_path, monkeypatch):
 @pytest.fixture
 def calls(monkeypatch):
     seen = []
-    monkeypatch.setattr(lifecycle, "update_supervised_pgids", lambda verb, pgids: seen.append((verb, sorted(pgids))))
+    for verb, name in (("register", "own_process_groups"), ("unregister", "release_process_groups")):
+        monkeypatch.setattr(lifecycle, name, lambda pgids, verb=verb: seen.append((verb, sorted(pgids))))
     monkeypatch.setattr(lifecycle, "register_child", lambda pid, purpose: None)
     return seen
 

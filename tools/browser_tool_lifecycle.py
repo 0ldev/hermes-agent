@@ -14,7 +14,7 @@ from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from hermes_cli.process_identity import register_child, update_supervised_pgids
+from hermes_cli.process_identity import own_process_groups, register_child, release_process_groups
 from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
@@ -675,7 +675,7 @@ def _own_local_daemon(session_name: str) -> None:
         new = groups - owned
         owned |= new
     if new:
-        update_supervised_pgids("register", sorted(new))
+        own_process_groups(sorted(new))
         register_child(daemon_pid, "agent-browser-daemon")
 
 
@@ -684,7 +684,7 @@ def _release_owned_daemon(session_name: str) -> None:
     with _owned_session_groups_lock:
         groups = _owned_session_groups.pop(session_name, None)
     if groups:
-        update_supervised_pgids("unregister", sorted(groups))
+        release_process_groups(sorted(groups))
 
 
 def _kill_verified_daemon(socket_dir: str, session_name: str) -> bool:
