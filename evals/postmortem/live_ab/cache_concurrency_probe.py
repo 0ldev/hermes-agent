@@ -221,7 +221,7 @@ for t in th: t.join(timeout=900)
 print(f"done in {time.time()-t0:.0f}s")
 
 # ---- summary: classify consecutive pairs per session
-rows = [json.loads(l) for l in open(OUT, encoding="utf-8") if l.strip()]
+rows = [json.loads(l) for l in open(OUT, encoding="utf-8-sig") if l.strip()]
 errs = [r for r in rows if "error" in r]; rows = [r for r in rows if "cache_read" in r]
 byw = collections.defaultdict(list)
 for r in rows: byw[r["worker"]].append(r)
@@ -249,4 +249,4 @@ json.dump(dict(provider=PROVIDER, wire=API_MODE, model=MODEL, workers=N, calls_p
                bad_pairs=[dict(kind=k, session=f"cacheprobe-{PROVIDER}-{ARGS.wire or API_MODE}-{N}-{w}", ok_id=p.get("message_id"), ok_cf_ray=(p.get("nous_headers") or {}).get("cf-ray"),
                               bad_id=c.get("message_id"), bad_cf_ray=(c.get("nous_headers") or {}).get("cf-ray"), read_before=p["cache_read"], read_after=c["cache_read"],
                               expected_read=p["prompt_tokens"], write_after=c["cache_creation"]) for w, p, c, k in bad]),
-          open(OUT.replace(".jsonl", ".summary.json"), "w", encoding="utf-8"), indent=1)
+          open(OUT.replace(".jsonl", ".summary.json"), "w", encoding="utf-8"), indent=1)  # windows-footgun: ok — a write, not a read
