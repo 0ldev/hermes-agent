@@ -6,9 +6,15 @@ set windows-shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Recipes in the CI groups below run the same commands as the GitHub Actions
 # steps named in their comments, without the dependency steps. Install those
-# with the deps-* recipes. Recipes that need the Python environment ask for an
-# activated shell (`source ./activate`, or `. .\activate.ps1` on Windows) and
-# never sync it themselves.
+# with the deps-* recipes. Recipes that need the Python environment ask for a
+# shell activated with the CI extras (`just deps-test`, then the activate_cmd
+# below) and never sync it themselves.
+
+# Union of the extras the CI test lanes install (Windows lanes omit bedrock).
+# Activation must name them too: a bare `source ./activate` rebuilds the test
+# environment with only [all], and tests for the missing extras skip.
+test_extras := if os_family() == "windows" { "all,anthropic,mistral,fal,modal,daytona,parallel-web,messaging,telegram" } else { "all,anthropic,bedrock,mistral,fal,modal,daytona,parallel-web,messaging,telegram" }
+activate_cmd := if os_family() == "windows" { ". .\\activate.ps1 -TestExtras " + test_extras } else { "source ./activate --test-extras " + test_extras }
 
 # CI blanks the provider keys so no test can reach a live API.
 no_keys := "OPENROUTER_API_KEY= OPENAI_API_KEY= NOUS_API_KEY="
@@ -63,13 +69,13 @@ lint-shared:
 # Build the checkout's test environment with the provider extras the CI lanes use
 [group('deps')]
 [unix]
-deps-test extras="all,anthropic,bedrock,mistral,fal,modal,daytona,parallel-web,messaging,telegram":
+deps-test extras=test_extras:
     bash setup-hermes.sh --runtime-only --test-environment={{ extras }}
 
 # Build the checkout's test environment with the provider extras the CI lanes use
 [group('deps')]
 [windows]
-deps-test extras="all,anthropic,mistral,fal,modal,daytona,parallel-web,messaging,telegram":
+deps-test extras=test_extras:
     pwsh -NoProfile -File setup-hermes.ps1 -RuntimeOnly -TestExtras '{{ extras }}'
 
 # Install every npm workspace from package-lock.json
@@ -101,9 +107,25 @@ deps-pm-bundle:
 deps-pm-bundle:
     PYTHONUTF8=1 python -S -B scripts/bundles/native_build.py --prepare-only --source "{{ justfile_directory() }}" --work "{{ justfile_directory() }}/.build/payload-job" --cache "{{ justfile_directory() }}/.build/payload-inputs" --out "{{ justfile_directory() }}/.build/agent-payload" --ref HEAD
 
+# The shell carries a current Hermes environment whose test venv has every CI extra
 [private]
+[script("bash")]
 _require-env:
-    @. scripts/_activation.sh && hermes_activation_current "$PWD" || { echo "error: no current Hermes environment in this shell. Run 'just deps-test', then 'source ./activate' ('. .\\activate.ps1' on Windows)." >&2; exit 1; }
+    set -euo pipefail
+    fix="Run 'just deps-test', then '{{ activate_cmd }}'."
+    if ! { . scripts/_activation.sh && hermes_activation_current "$PWD"; }; then
+        echo "error: no current Hermes environment in this shell. $fix" >&2
+        exit 1
+    fi
+    if ! "$__HERMES_TEST_PYTHON" -c '
+    import json, os, pathlib, sys
+    record = pathlib.Path(os.environ["__HERMES_TEST_PYTHON"]).parents[3] / "active.json"
+    missing = sorted(set(sys.argv[1].split(",")) - set(json.loads(record.read_text()).get("extras", [])))
+    sys.exit("error: the test environment lacks CI extras: " + ", ".join(missing) if missing else 0)
+    ' "{{ test_extras }}"; then
+        echo "$fix" >&2
+        exit 1
+    fi
 
 # ── lint.yml ─────────────────────────────────────────────────────────────────
 
@@ -479,11 +501,15 @@ _test-os marker: _require-env
 [windows]
 test-e2e-windows: _require-env
     set -uo pipefail
+    # Unlike a CI runner, a developer machine may already run python/hermes processes.
+    baseline="$(mktemp)"
+    trap 'rm -f "$baseline"' EXIT
+    {{ just_executable() }} _windows-python-snapshot "$(cygpath -w "$baseline")" || exit 1
     export {{ no_keys }}
     HERMES_TEST_WORKERS=6 HERMES_TEST_FILE_TIMEOUT=900 HERMES_TEST_FILE_RETRIES=0 \
         scripts/run_tests.sh tests/e2e/core/windows/ -- -m "platforms and integration" -v --tb=short -rA
     rc=$?
-    {{ just_executable() }} _windows-no-leftovers || rc=1
+    {{ just_executable() }} _windows-no-leftovers "$(cygpath -w "$baseline")" || rc=1
     exit "$rc"
 
 # windows-install-update-e2e.yml: install.ps1 + hermes update journey (creates throwaway machines and user profiles)
@@ -508,6 +534,7 @@ test-windows-install-update: _require-env
     else
         cat "$work/win-update-e2e/crash-cells-ran.txt"
     fi
+    {{ just_executable() }} _windows-no-machine-leftovers "$HERMES_E2E_MACHINE_ROOT" || rc=1
     echo "transcripts, logs and receipts: $work/win-update-e2e"
     exit "$rc"
 
@@ -533,14 +560,52 @@ test-windows-long-paths: _require-env
     fi
     scripts/run_tests.sh tests/pm/test_long_paths_windows_live.py -- -m "platforms and integration" -v
 
+# Write the identities (pid + creation time: Windows reuses pids) of the running python/hermes processes
 [private]
 [script("pwsh")]
-_windows-no-leftovers:
+[windows]
+_windows-python-snapshot out:
     $names = 'python.exe', 'pythonw.exe', 'hermes.exe'
+    $ids = @(Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name.ToLower() } |
+      ForEach-Object { "$($_.ProcessId)|$($_.CreationDate.ToUniversalTime().Ticks)" })
+    Set-Content -LiteralPath '{{ out }}' -Value $ids
+
+# tests-os.yml "No leftover Python / Hermes processes", excluding the processes in the baseline snapshot
+[private]
+[script("pwsh")]
+[windows]
+_windows-no-leftovers baseline:
+    $names = 'python.exe', 'pythonw.exe', 'hermes.exe'
+    $known = @(Get-Content -LiteralPath '{{ baseline }}')
     $deadline = (Get-Date).AddSeconds(20)
     do {
-      $left = @(Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name.ToLower() -and $_.ProcessId -ne $PID })
+      $left = @(Get-CimInstance Win32_Process | Where-Object {
+        ($names -contains $_.Name.ToLower()) -and
+        ($known -notcontains "$($_.ProcessId)|$($_.CreationDate.ToUniversalTime().Ticks)")
+      })
       if ($left.Count -eq 0) { 'no leftover python/hermes processes'; exit 0 }
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    foreach ($p in $left) { "leftover pid=$($p.ProcessId) ppid=$($p.ParentProcessId): $($p.CommandLine)" }
+    'Processes running before the suite were excluded; one started by another program during the run still counts.'
+    exit 1
+
+# windows-install-update-e2e.yml "No leftover Python / Hermes processes": only processes of this run's machines
+[private]
+[script("pwsh")]
+[windows]
+_windows-no-machine-leftovers root:
+    $names = 'python.exe', 'pythonw.exe', 'hermes.exe', 'node.exe'
+    # Work dirs live under the machine root; profiles are C:\Users\*hermes-e2e-<id>.
+    $root = '{{ root }}'.ToLower()
+    $profileMark = 'hermes-e2e-'
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+      $left = @(Get-CimInstance Win32_Process | Where-Object {
+        $blob = "$($_.CommandLine) $($_.ExecutablePath)".ToLower()
+        ($names -contains $_.Name.ToLower()) -and ($blob.Contains($root) -or $blob.Contains($profileMark))
+      })
+      if ($left.Count -eq 0) { 'no leftover processes from the E2E machines'; exit 0 }
       Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
     foreach ($p in $left) { "leftover pid=$($p.ProcessId) ppid=$($p.ParentProcessId): $($p.CommandLine)" }
@@ -844,10 +909,24 @@ test-docker variant="slim": _require-env
         if [ "$development" = "$display" ]; then distance=0; else distance="${development%%.*}"; fi
         identity+=(--base-version "$base" --display-version "$display" --distance "$distance")
     fi
+    python scripts/ci/check_profile_archive_boundary.py
+    # The build context needs the Docker stamp, but in the checkout it would
+    # rebrand the source install (version source, updateMechanism: external).
+    # Put the original back (or none) after the build, on failure and on interrupt.
+    saved="$(mktemp)"
+    had_stamp=0
+    if [ -e install-stamp.json ]; then cp -p install-stamp.json "$saved"; had_stamp=1; fi
+    restore_stamp() {
+        if [ "$had_stamp" = 1 ]; then mv -f "$saved" install-stamp.json; else rm -f install-stamp.json "$saved"; fi
+        had_stamp=restored
+    }
+    trap '[ "$had_stamp" = restored ] || restore_stamp' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
     python scripts/write_install_stamp.py --output install-stamp.json \
         --distribution docker --update-mechanism external --source ci "${identity[@]}"
-    python scripts/ci/check_profile_archive_boundary.py
     docker build --file Dockerfile --tag nousresearch/hermes-agent:test --build-arg HERMES_BOT_DESKTOP="$desktop" .
+    restore_stamp
     export {{ no_keys }}
     HERMES_TEST_IMAGE=nousresearch/hermes-agent:test HERMES_TEST_WORKERS="$(getconf _NPROCESSORS_ONLN)" \
         scripts/run_tests.sh tests/docker/
