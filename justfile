@@ -107,6 +107,12 @@ deps-pm-bundle:
 deps-pm-bundle:
     PYTHONUTF8=1 python -S -B scripts/bundles/native_build.py --prepare-only --source "{{ justfile_directory() }}" --work "{{ justfile_directory() }}/.build/payload-job" --cache "{{ justfile_directory() }}/.build/payload-inputs" --out "{{ justfile_directory() }}/.build/agent-payload" --ref HEAD
 
+# Desktop packaging downloads (`just test-js` packages the app). Their tarballs
+# fail check-profile-archives and test-docker; the next package re-downloads them.
+[group('deps')]
+clean-desktop-cache:
+    rm -rf "{{ justfile_directory() }}/.cache/desktop-inputs"
+
 # The shell carries a current Hermes environment whose test venv has every CI extra
 [private]
 [script("bash")]
@@ -229,8 +235,18 @@ check-lazy-deps: _require-env
 
 # profile-artifact-check.yml
 [group('guards')]
+[script("bash")]
 check-profile-archives: _require-env
-    python scripts/ci/check_profile_archive_boundary.py
+    set -euo pipefail
+    if ! report="$(python scripts/ci/check_profile_archive_boundary.py 2>&1)"; then
+        printf '%s\n' "$report" >&2
+        # `just test-js` packages the desktop app, whose tool downloads land here.
+        if grep -q '^  \.cache/desktop-inputs/' <<<"$report"; then
+            echo "hint: the .cache/desktop-inputs/ archives are desktop packager downloads; 'just clean-desktop-cache' removes them" >&2
+        fi
+        exit 1
+    fi
+    printf '%s\n' "$report"
 
 # blob-size-check.yml, against base (default: merge-base with origin/main)
 [group('guards')]
@@ -909,7 +925,7 @@ test-docker variant="slim": _require-env
         if [ "$development" = "$display" ]; then distance=0; else distance="${development%%.*}"; fi
         identity+=(--base-version "$base" --display-version "$display" --distance "$distance")
     fi
-    python scripts/ci/check_profile_archive_boundary.py
+    {{ just_executable() }} check-profile-archives
     # The build context needs the Docker stamp, but in the checkout it would
     # rebrand the source install (version source, updateMechanism: external).
     # Put the original back (or none) after the build, on failure and on interrupt.
