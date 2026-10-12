@@ -271,8 +271,8 @@ def _profile_name_for_home(home: Path) -> str:
         return "default"
 
 
-def _tool_guidance_block(agent: Any) -> Optional[str]:
-    """Tool-aware behavioral guidance, injected only when the tools are loaded."""
+def _toolset_guidance_block(agent: Any) -> Optional[str]:
+    """Guidance whose contents depend on the currently loaded toolset."""
     names = agent.valid_tool_names
     # With both memory stores disabled no store is built, so the full guidance
     # would steer the model at a tool that always answers "Memory is not
@@ -284,18 +284,28 @@ def _tool_guidance_block(agent: Any) -> Optional[str]:
             getattr(agent, "_user_profile_enabled", True),
             skill_manage_available="skill_manage" in names,
         )
+    toolset_guidance = [
+        memory_guidance,
+        SESSION_SEARCH_GUIDANCE if "session_search" in names else None,
+        SKILLS_GUIDANCE if "skill_manage" in names else None,
+    ]
+    return " ".join(g for g in toolset_guidance if g) or None
+
+
+def _kanban_guidance_block(agent: Any) -> Optional[str]:
+    """Kanban worker guidance, gated by the session's dispatcher-owned role."""
+    names = agent.valid_tool_names
     # Kanban lifecycle: resolved once at __init__ (_kanban_worker_guidance);
     # fallback paths must also limit task protocol guidance to dispatcher workers.
     _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
     if _kanban_guidance is None and "kanban_show" in names and owned_kanban_task():
         _kanban_guidance = KANBAN_GUIDANCE
-    tool_guidance = [
-        memory_guidance,
-        SESSION_SEARCH_GUIDANCE if "session_search" in names else None,
-        SKILLS_GUIDANCE if "skill_manage" in names else None,
-        _kanban_guidance,
-    ]
-    return " ".join(g for g in tool_guidance if g) or None
+    return _kanban_guidance or None
+
+
+def _tool_guidance_block(agent: Any) -> Optional[str]:
+    """All tool and role-aware guidance, retained for direct callers."""
+    return " ".join(g for g in (_toolset_guidance_block(agent), _kanban_guidance_block(agent)) if g) or None
 
 
 def _skills_prompt(agent: Any) -> str:
@@ -560,7 +570,7 @@ def _guidance_parts(agent: Any) -> list[str]:
                 ("_parallel_tool_call_guidance", PARALLEL_TOOL_CALL_GUIDANCE),
             ) if getattr(agent, flag, True)
         ]
-    parts.append(_tool_guidance_block(agent))  # None/empty entries are dropped by _join_tier
+    parts.append(_kanban_guidance_block(agent))  # None/empty entries are dropped by _join_tier
     if not agent.valid_tool_names:
         return parts
     # Steering only lands inside tool results, so only reachable with tools.
@@ -776,7 +786,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
     # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
     # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
-    volatile_parts: list[str] = [skills_prompt, *_memory_parts(agent)]
+    volatile_parts: list[str] = [_toolset_guidance_block(agent), skills_prompt, *_memory_parts(agent)]
     # Plugin sections are confined to one coarse anchor in the volatile tail so
     # a resumed process can reconstruct the stable prefix without re-running plugins.
     volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))

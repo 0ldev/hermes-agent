@@ -232,6 +232,32 @@ def _prompt_parts(agent):
         return build_system_prompt_parts(agent)
 
 
+def test_toolset_guidance_does_not_split_stable_prompt_prefix(monkeypatch, tmp_path):
+    """Regression for #137307: tool-restricted children reuse the stable prefix."""
+    monkeypatch.chdir(tmp_path)
+    full = _make_agent(valid_tool_names={"memory", "session_search", "skill_manage"})
+    memory_only = _make_agent(valid_tool_names={"memory"})
+    restricted = _make_agent(valid_tool_names={"terminal"})
+    with (
+        patch("agent.system_prompt._skills_prompt", return_value=""),
+        patch("agent.system_prompt._auto_load_parts", return_value=[]),
+        patch("agent.system_prompt._coding_parts", return_value=([], [], [])),
+        patch("agent.system_prompt._post_workspace_parts", return_value=[]),
+    ):
+        full_parts = _prompt_parts(full)
+        memory_only_parts = _prompt_parts(memory_only)
+        restricted_parts = _prompt_parts(restricted)
+
+    assert full_parts["stable"] == memory_only_parts["stable"] == restricted_parts["stable"]
+    assert "Memory is the narrow exception" not in full_parts["stable"]
+    assert "Memory is the narrow exception" in full_parts["volatile"]
+    assert "(skill_manage)" in full_parts["volatile"]
+    assert "session_search" in full_parts["volatile"]
+    assert "(skill_manage)" not in memory_only_parts["volatile"]
+    assert "session_search" not in memory_only_parts["volatile"]
+    assert "Memory is the narrow exception" not in restricted_parts["volatile"]
+
+
 def _init_code_repo(path):
     """A git repo that actually holds code — the coding posture requires a source
     file (or manifest), not a bare ``.git`` (a prose/notes repo stays general)."""
