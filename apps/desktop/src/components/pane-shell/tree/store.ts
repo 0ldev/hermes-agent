@@ -142,7 +142,9 @@ export const $layoutTree = modeLayout.atom<LayoutNode | null>(
     // tile panes: trees written by older builds (before persist() scrubbed
     // them) heal on their next boot instead of re-arranging around ghost
     // preview tiles.
-    isLayoutNode(parsed) ? scrubEphemeralPanes(normalize(migratePersistedTree(parsed))) : defaultTrees[modeLayout.mode]
+    isLayoutNode(parsed)
+      ? (scrubEphemeralPanes(normalize(migratePersistedTree(parsed))) ?? defaultTrees[modeLayout.mode])
+      : defaultTrees[modeLayout.mode]
   ),
   true
 )
