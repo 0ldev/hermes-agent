@@ -98,8 +98,21 @@ class _Ctx:
     def __exit__(self, *a): return self.mgr.__exit__(*a)
     def __getattr__(self, n): return getattr(self.mgr, n)
 
+def _sha(o):
+    return hashlib.sha256(json.dumps(o, sort_keys=True, default=str).encode()).hexdigest()[:10]
+
+def _probe_worker(first):
+    """Worker index from the ``[probe-session N]`` tag on the session's first message."""
+    import re as _re
+    content = (first or {}).get("content")
+    text = content if isinstance(content, str) else "".join(
+        b.get("text", "") for b in (content or []) if isinstance(b, dict))
+    return _re.search(r"\[probe-session (\d+)\]", text or "")
+
 def patched_stream(self, **kw):
     msgs = kw.get("messages") or []
+    m = _probe_worker(msgs[0] if msgs else None)
+    sys_sha, tools_sha, msg_shas = _sha(kw.get("system")), _sha(kw.get("tools")), [_sha(x) for x in msgs]
     rec = dict(worker=int(m.group(1)) if m else None, call=len(msgs), t_start=time.time(), model=kw.get("model"),
                n_msgs=len(msgs), system_sha=sys_sha, tools_sha=tools_sha, msg_shas=msg_shas)
     if SETTLE_S > 0 and len(msgs) > 1:
