@@ -7,7 +7,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
-from typing import Any, Callable, Dict, List, Mapping, Set
+from typing import Any, Callable, Mapping
 
 from agent.context_compressor import _DB_PERSISTED_MARKER
 from agent.message_metadata import (
@@ -111,8 +111,8 @@ def _active_logical_message_row(
 
 
 def _active_uid_dedupe(
-    conn: sqlite3.Connection, session_id: str, messages: List[Dict[str, Any]]
-) -> Set[str]:
+    conn: sqlite3.Connection, session_id: str, messages: list[dict[str, Any]]
+) -> set[str]:
     """ACTIVE durable uids among *messages*' no-snapshot, no-``_row_id`` dicts — the re-insert guard.
 
     A dict rebuilt from durable rows (crash/failed-turn history restore, session resume, a repaired
@@ -132,7 +132,7 @@ def _active_uid_dedupe(
         and not isinstance(msg.get(DB_ROW_SNAPSHOT), str)
         and (uid := message_uid_or_none(msg))
     })
-    durable: Set[str] = set()
+    durable: set[str] = set()
     if not candidate_uids:
         return durable
     try:
@@ -145,7 +145,7 @@ def _active_uid_dedupe(
                     (session_id, *chunk),
                 ).fetchall()
             )
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.warning("durable-uid re-insert probe failed (dedupe skipped, append-only behavior): %s", exc)
         return set()
     return durable
