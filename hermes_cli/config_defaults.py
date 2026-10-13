@@ -793,6 +793,7 @@ DEFAULT_CONFIG = {
         "triage_specifier": _aux(120),
         "kanban_decomposer": _aux(180),
         "profile_describer": _aux(60),   # 1-2 sentence profile blurb; short, cheap
+        "composer_predictions": _aux(15),  # display.composer_predictions next-message guess; cheap model fine
         "goal_judge": _aux(60),          # /goal satisfaction + contract drafting; JSON calls
         # Curator skill-usage review can take minutes on reasoning models (umbrellas over hundreds
         # of skills); route cheaper via `hermes model` → auxiliary → Curator.
@@ -830,6 +831,9 @@ DEFAULT_CONFIG = {
         "busy_input_mode": "interrupt",  # interrupt | queue | steer
         # Desktop/TUI ghost-text reply suggestions after an agent turn (served by complete.suggest).
         "composer_suggestions": True,
+        # Opt-in: when no deterministic suggestion fits, predict the next message with the
+        # auxiliary.composer_predictions model (one extra request per completed turn).
+        "composer_predictions": False,
         # steer mode: false hides only the "Steered into current run" bubble; steering itself still
         # happens.
         "busy_steer_ack_enabled": True,
