@@ -15,7 +15,7 @@ import { armLabel } from './graph'
 import { KindMark, kindMarkOf } from './kind-mark'
 import type { FlowDir } from './layout'
 import { useRunNow } from './player'
-import { isBrokenReply, stepLink, type StepRuntime } from './protocol'
+import { isBrokenReply, stepLink, type StepLink, type StepRuntime, type ToolCall } from './protocol'
 import { type Arm, NEW_BRANCH, type StepConfig, type StepDef, WAIT_KIND_OPTIONS } from './scenario'
 
 // React Flow's own API says "node" — NodeProps, nodeTypes, onNodesChange — so
@@ -477,7 +477,11 @@ function Summary({ text }: { text: string }) {
 // stays mounted at height zero so it has something to grow from. The progress
 // track inside it does the same, so a step settling gives up its bar smoothly
 // instead of the card jumping 11px the instant the last tool call returns.
-function NodeBody({ def, rt }: { def: StepDef; rt: StepRuntime }) {
+// Everything the body line is derived from: whether the step is moving, what
+// it's calling, whether it landed a URL or failed, and whether there is
+// anything to print at all. Pure — the state lives in the runtime; this only
+// reads it, so it can be taken out of the render path whole.
+function bodyView(rt: StepRuntime) {
   const live = rt.status === 'running' || rt.status === 'looping'
   // Parked on a person: no tools, no progress — the summary IS the ask, and
   // the card stays visibly open on it while the run waits.
@@ -485,27 +489,27 @@ function NodeBody({ def, rt }: { def: StepDef; rt: StepRuntime }) {
   const tool = live ? rt.currentTool : null
   // Only once the step has settled — a URL mid-run is a half-written artifact.
   const link = live || waiting ? null : stepLink(rt.output)
+  const failed = rt.status === 'failed' || isBrokenReply(rt.summary)
   // A live step keeps the block even with nothing printed yet: the progress
   // track is the line in that case.
-  const failed = rt.status === 'failed' || isBrokenReply(rt.summary)
   const open = live || waiting || Boolean(tool) || Boolean(rt.summary) || Boolean(link)
 
-  // One line element in all three states, rather than three that swap. It has
-  // to be a single persistent box for the same reason the blocks do: the line
-  // arriving is a height change, and swapping one element for another gives the
-  // browser nothing to interpolate. Collapsed it's 0; open it's a fixed 17px,
-  // and because that's a real number the block above it — which is `auto` —
-  // grows along with it instead of snapping when its content changes.
-  //
-  // Live, the block is the GUI's in-flight tool card: a shimmering header verb
-  // ("Coding…", the streaming-title treatment from fallback.tsx:311) with the
-  // ToolRunTicker under it — the reel of calls, each new one sliding the last
-  // up and out of a one-line window (run-ticker.tsx / .tool-ticker). No
-  // progress bar: a run doesn't know how done it is; it shows what it's DOING.
-  const rows = live ? [...rt.toolCalls, ...(tool && tool !== rt.toolCalls[rt.toolCalls.length - 1] ? [tool] : [])] : []
-  const ticking = live && rows.length > 0
+  return { failed, link, live, open, tool }
+}
 
-  const line = ticking ? (
+/** The reel's rows: the settled calls, plus the live one when it isn't the
+ *  last of them already. */
+function liveRows(rt: StepRuntime, tool: ToolCall | null): ToolCall[] {
+  return tool && tool !== rt.toolCalls[rt.toolCalls.length - 1] ? [...rt.toolCalls, tool] : [...rt.toolCalls]
+}
+
+/** Live, the block is the GUI's in-flight tool card: a shimmering header verb
+ *  ("Coding…", the streaming-title treatment from fallback.tsx:311) with the
+ *  ToolRunTicker under it — the reel of calls, each new one sliding the last
+ *  up and out of a one-line window (run-ticker.tsx / .tool-ticker). No
+ *  progress bar: a run doesn't know how done it is; it shows what it's DOING. */
+function ToolTicker({ rows }: { rows: ToolCall[] }) {
+  return (
     <div className="tool-ticker" data-tool-ticker="">
       <div className="tool-ticker__reel" style={{ '--tool-ticker-index': rows.length - 1 } as React.CSSProperties}>
         {rows.map((c, i) => (
@@ -516,11 +520,15 @@ function NodeBody({ def, rt }: { def: StepDef; rt: StepRuntime }) {
         ))}
       </div>
     </div>
-  ) : link ? (
-    // A step that produced a URL keeps its summary as the label and hangs the
-    // href off it: "PR #1234 opened" is what the agent said happened, and it's
-    // more readable than the URL it happened at. The artifact is what the run
-    // was for — it shouldn't be three clicks into the Data tab.
+  )
+}
+
+/** A step that produced a URL keeps its summary as the label and hangs the
+ *  href off it: "PR #1234 opened" is what the agent said happened, and it's
+ *  more readable than the URL it happened at. The artifact is what the run
+ *  was for — it shouldn't be three clicks into the Data tab. */
+function NodeLink({ link, summary }: { link: StepLink; summary: string | null }) {
+  return (
     <a
       className="node-link"
       href={link.href}
@@ -531,8 +539,26 @@ function NodeBody({ def, rt }: { def: StepDef; rt: StepRuntime }) {
       target="_blank"
       title={link.href}
     >
-      {rt.summary ? <Summary text={rt.summary} /> : link.label}
+      {summary ? <Summary text={summary} /> : link.label}
     </a>
+  )
+}
+
+function NodeBody({ def, rt }: { def: StepDef; rt: StepRuntime }) {
+  const { failed, link, live, open, tool } = bodyView(rt)
+  const rows = live ? liveRows(rt, tool) : []
+  const ticking = live && rows.length > 0
+
+  // One line element in all three states, rather than three that swap. It has
+  // to be a single persistent box for the same reason the blocks do: the line
+  // arriving is a height change, and swapping one element for another gives the
+  // browser nothing to interpolate. Collapsed it's 0; open it's a fixed 17px,
+  // and because that's a real number the block above it — which is `auto` —
+  // grows along with it instead of snapping when its content changes.
+  const line = ticking ? (
+    <ToolTicker rows={rows} />
+  ) : link ? (
+    <NodeLink link={link} summary={rt.summary} />
   ) : rt.summary ? (
     <Summary text={rt.summary} />
   ) : null
