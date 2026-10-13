@@ -656,6 +656,56 @@ class WebhookAdapter(BasePlatformAdapter):
             logger.warning("[webhook] Skill loading failed: %s", e)
         return prompt
 
+    def _dispatch_workflow_route(self, route_name: str, route_config: dict,
+                                 payload: Any) -> Optional[web.Response]:
+        """One POST's workflow dispatch: publish the run or event and answer it.
+
+        A workflow route answers only to its workflow: it accepts an unsigned
+        POST (the unguessable URL is the credential) and 404s rather than
+        falling through to the generic agent dispatch. Returns None when the
+        route has no workflow binding at all, so the caller runs the agent
+        path. Publishing goes through the on-disk event inbox, so a failure
+        there is answered with a 500 here instead of taking down the handler.
+        """
+        workflow_route = _is_workflow_route(route_name, route_config)
+
+        # Workflows are event-driven: the hook publishes, and the workflow reactor (in whichever
+        # Hermes process holds it) starts the run. The run id is minted here so the caller can
+        # follow it.
+        workflow_id = str(route_config.get("workflow") or "").strip()
+        if workflow_id:
+            try:
+                from workflow import events as workflow_events
+                from workflow.store import new_run_id
+
+                run_id = new_run_id()
+                workflow_events.publish(workflow_events.START, {
+                    "workflowId": workflow_id, "runId": run_id, "payload": payload, "source": "webhook",
+                    "trigger": str(route_config.get("trigger") or "") or None,
+                }, source="webhook")
+                return web.json_response({"status": "started", "workflow": workflow_id, "run_id": run_id})
+            except Exception as exc:
+                logger.error("[webhook] workflow start failed route=%s", route_name, exc_info=True)
+                return web.json_response({"error": f"Failed to start workflow: {exc}"}, status=500)
+
+        if workflow_route:
+            return web.json_response(
+                {"error": "No workflow bound to this hook"},
+                status=404,
+            )
+
+        workflow_event = str(route_config.get("workflow_event") or "").strip()
+        if workflow_event:
+            try:
+                from workflow import events as workflow_events
+
+                queued = workflow_events.publish(workflow_event, payload, source="webhook")
+                return web.json_response({"status": "queued", "event": workflow_event, "id": queued["id"]})
+            except Exception as exc:
+                logger.error("[webhook] workflow event failed route=%s", route_name, exc_info=True)
+                return web.json_response({"error": f"Failed to emit workflow event: {exc}"}, status=500)
+        return None
+
     async def _handle_webhook(self, request: web.Request) -> web.Response:
         """POST /webhooks/{route_name} — receive and process a webhook event."""
         route_name, route_config, profile, error_response = self._resolve_route(request)
@@ -684,114 +734,10 @@ class WebhookAdapter(BasePlatformAdapter):
         # A workflow route answers only to its workflow: it accepts an
         # unsigned POST (the unguessable URL is the credential) and 404s
         # rather than falling through to the generic agent dispatch.
-        workflow_route = _is_workflow_route(route_name, route_config)
+        workflow_response = self._dispatch_workflow_route(route_name, route_config, payload)
+        if workflow_response is not None:
+            return workflow_response
 
-        # Workflows are event-driven: the hook publishes, and the workflow reactor (in whichever
-        # Hermes process holds it) starts the run. The run id is minted here so the caller can
-        # follow it.
-        workflow_id = str(route_config.get("workflow") or "").strip()
-        if workflow_id:
-            try:
-                from workflow import events as workflow_events
-                from workflow.store import new_run_id
-
-                run_id = new_run_id()
-                workflow_events.publish(workflow_events.START, {
-                    "workflowId": workflow_id, "runId": run_id, "payload": payload, "source": "webhook",
-                    "trigger": str(route_config.get("trigger") or "") or None,
-                }, source="webhook")
-                return web.json_response({"status": "started", "workflow": workflow_id, "run_id": run_id})
-            except Exception as exc:
-                logger.error("[webhook] workflow start failed route=%s: %s", route_name, exc)
-                return web.json_response({"error": f"Failed to start workflow: {exc}"}, status=500)
-
-        if workflow_route:
-            return web.json_response(
-                {"error": "No workflow bound to this hook"},
-                status=404,
-            )
-
-        workflow_event = str(route_config.get("workflow_event") or "").strip()
-        if workflow_event:
-            try:
-                from workflow import events as workflow_events
-
-                queued = workflow_events.publish(workflow_event, payload, source="webhook")
-                return web.json_response({"status": "queued", "event": workflow_event, "id": queued["id"]})
-            except Exception as exc:
-                logger.error("[webhook] workflow event failed route=%s: %s", route_name, exc)
-                return web.json_response({"error": f"Failed to emit workflow event: {exc}"}, status=500)
-
-        if route_config.get("script"):
-            # run_route_script shells out (subprocess.run, up to its timeout);
-            # run it in a worker thread so it can't block the gateway event loop.
-            keep, transformed_payload = await asyncio.to_thread(
-                self._route_processor.run_route_script,
-                route_config.get("script"),
-                payload,
-            )
-            if not keep:
-                logger.info(
-                    "[webhook] script ignored event=%s route=%s",
-                    event_type,
-                    route_name,
-                )
-                return web.json_response(
-                    {
-                        "status": "ignored",
-                        "reason": "script",
-                        "route": route_name,
-                    }
-                )
-            payload = transformed_payload or payload
-
-        # Format prompt from template
-        prompt_template = route_config.get("prompt", "")
-        prompt = self._render_prompt(
-            prompt_template, payload, event_type, route_name
-        )
-
-        # Inject skill content if configured.
-        # We call build_skill_invocation_message() directly rather than
-        # using /skill-name slash commands — the gateway's command parser
-        # would intercept those and break the flow.
-        skills = route_config.get("skills", [])
-        if skills:
-            try:
-                from agent.skill_commands import (
-                    build_skill_invocation_message,
-                    get_skill_commands,
-                )
-
-                skill_cmds = get_skill_commands()
-                for skill_name in skills:
-                    cmd_key = f"/{skill_name}"
-                    if cmd_key in skill_cmds:
-                        skill_content = build_skill_invocation_message(
-                            cmd_key, user_instruction=prompt
-                        )
-                        if skill_content:
-                            prompt = skill_content
-                            break  # Load the first matching skill
-                    else:
-                        logger.warning(
-                            "[webhook] Skill '%s' not found", skill_name
-                        )
-            except Exception as e:
-                logger.warning("[webhook] Skill loading failed: %s", e)
-
-        # Build a unique delivery ID
-        delivery_id = request.headers.get(
-            "X-GitHub-Delivery",
-            request.headers.get(
-                "svix-id",
-                request.headers.get("X-Request-ID", str(int(time.time() * 1000))),
-            ),
-        )
-
-        # ── Idempotency ─────────────────────────────────────────
-        # Skip duplicate deliveries (webhook retries).
-        now = time.time()
         # Script, prompt render and skill lookup read the profile's home (skills/, config); the runner
         # only enters the routed profile's scope later around handle_message, so enter it here.
         # See #67277.
