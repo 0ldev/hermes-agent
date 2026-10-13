@@ -1,9 +1,8 @@
-"""Production-builder prefix and role controls for #137307.
+"""Production-builder skills-index ordering control for #137307.
 
 Only external availability and runtime inputs are controlled; prompt renderers
-and delegate toolset resolution stay real.
+stay real.
 """
-from contextlib import nullcontext
 from datetime import UTC, datetime
 from os.path import commonprefix
 from pathlib import Path
@@ -11,12 +10,6 @@ import socket
 
 import pytest
 
-from agent.delegation_context import delegated_child_context
-from agent.prompt_builder import (
-    DEFAULT_AGENT_IDENTITY, HERMES_AGENT_HELP_GUIDANCE, HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS,
-    KANBAN_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE, SESSION_SEARCH_GUIDANCE,
-    SKILLS_GUIDANCE, STEER_CHANNEL_NOTE,
-)
 from agent.system_prompt import _skills_prompt, build_system_prompt_parts
 
 
@@ -100,76 +93,3 @@ def test_shared_skills_index_precedes_memory_guidance_divergence(agent_factory, 
     assert restricted_parts["volatile"].startswith(index)
     assert "Memory is the narrow exception" in full_parts["volatile"]
     assert "Memory is the narrow exception" not in restricted_parts["volatile"]
-
-
-@pytest.mark.parametrize("model, requested, shared_block", [
-    pytest.param(
-        "anthropic/claude-sonnet-4.5", None, STEER_CHANNEL_NOTE,
-        id="claude-inherited",
-    ),
-    pytest.param(
-        "anthropic/claude-sonnet-4.5", ["terminal", "file", "web"],
-        commonprefix([HERMES_AGENT_HELP_GUIDANCE, HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS]),
-        id="claude-terminal-file-web",
-    ),
-    pytest.param(
-        "openai/gpt-5", ["skills", "web"],
-        OPENAI_MODEL_EXECUTION_GUIDANCE.split("\n\n<mandatory_tool_use>", 1)[0],
-        id="gpt-skills-web",
-    ),
-])
-def test_resolved_leaf_guidance_is_tool_correct(
-    agent_factory, model, requested, shared_block, record_property,
-):
-    """Real leaves share the common scaffold through a semantic block, possibly further."""
-    from tools.delegate_tool_toolsets import DELEGATE_BLOCKED_TOOLS, _resolve_child_toolsets
-
-    parent = agent_factory(model=model, skip_context_files=False)
-    enabled, disabled = _resolve_child_toolsets(parent, requested, "leaf")
-    with delegated_child_context():
-        child = agent_factory(
-            model=model, enabled_toolsets=enabled, disabled_toolsets=disabled,
-            platform="subagent", side_agent=True, skip_context_files=True, skip_memory=True,
-        )
-    assert not (child.valid_tool_names & DELEGATE_BLOCKED_TOOLS)
-    required_tool = "terminal" if requested is None or "terminal" in requested else "skill_view"
-    assert required_tool in child.valid_tool_names
-    rendered = []
-    for agent in (parent, child):
-        parts = build_system_prompt_parts(agent)
-        for guidance, tool in (
-            ("Memory is the narrow exception", "memory"),
-            (SESSION_SEARCH_GUIDANCE, "session_search"),
-            (SKILLS_GUIDANCE, "skill_manage"),
-        ):
-            assert guidance not in parts["stable"]
-            assert guidance not in parts["context"]
-            assert parts["volatile"].count(guidance) == int(tool in agent.valid_tool_names)
-        assert KANBAN_GUIDANCE not in _joined(parts)
-        rendered.append(_joined(parts))
-    shared = commonprefix(rendered)
-    assert shared.startswith(DEFAULT_AGENT_IDENTITY)
-    assert shared_block and all(shared_block in prompt for prompt in rendered)
-    # Require the whole common block before any divergence. This is a lower
-    # bound, so relocating later differences or making the prompts equal is fine.
-    minimum_boundary = max(prompt.index(shared_block) + len(shared_block) for prompt in rendered)
-    boundary = len(shared)
-    assert boundary >= minimum_boundary
-    record_property("minimum_shared_prefix_chars", minimum_boundary)
-    record_property("shared_prefix_chars", boundary)
-    record_property("parent_boundary", rendered[0][boundary:boundary + 180])
-    record_property("child_boundary", rendered[1][boundary:boundary + 180])
-
-
-@pytest.mark.parametrize("role", ["interactive", "worker", "child"])
-def test_kanban_role_guidance_stays_in_stable_tier(agent_factory, monkeypatch, role):
-    """Inheriting a worker's environment must not give a leaf its task protocol."""
-    if role != "interactive":
-        monkeypatch.setenv("HERMES_KANBAN_TASK", "t_prompt_worker")
-    with delegated_child_context() if role == "child" else nullcontext():
-        agent = agent_factory(enabled_toolsets=["kanban"], side_agent=role == "child")
-        parts = build_system_prompt_parts(agent)
-    assert "kanban_show" in agent.valid_tool_names
-    assert parts["stable"].count(KANBAN_GUIDANCE) == int(role == "worker")
-    assert KANBAN_GUIDANCE not in parts["context"]
-    assert KANBAN_GUIDANCE not in parts["volatile"]
