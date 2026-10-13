@@ -29,7 +29,7 @@ import type {
   UseComposerStateResult
 } from './interfaces.js'
 import { $isBlocked } from './overlayStore.js'
-import { getUiState } from './uiStore.js'
+import { $uiBusy, getUiState } from './uiStore.js'
 
 const TOKEN_MAX_COUNT = 32
 const TOKEN_MAX_TOTAL_BYTES = 4 * 1024 * 1024
@@ -145,7 +145,10 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
   const { historyRef, historyIdx, setHistoryIdx, historyDraftRef, pushHistory } = useInputHistory()
   const { completions, compIdx, setCompIdx, compReplace } = useCompletion(input, isBlocked, gw)
   const getGhostSid = useCallback(() => getUiState().sid, [])
-  const { acceptGhost, dismissGhost, ghost } = useGhostSuggestion(input, isBlocked, gw, getGhostSid)
+  // The ghost fires on the agent turn's busy -> idle edge; `$isBlocked` is overlay state, whose
+  // edge never coincides with a finished turn.
+  const turnBusy = useStore($uiBusy)
+  const { acceptGhost, dismissGhost, ghost } = useGhostSuggestion(input, turnBusy, gw, getGhostSid)
 
   const clearIn = useCallback(() => {
     setInput('')

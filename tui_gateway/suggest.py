@@ -45,6 +45,8 @@ _CONFIRM_RE = re.compile(
     re.IGNORECASE,
 )
 
+_OPEN_QUESTION_RE = re.compile(r"\s*(?:which|what|where|when|who|whom|whose|how)\b", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -86,7 +88,9 @@ def extract_suggestions(assistant_text: str) -> list[Candidate]:
     closing = next(
         (line for line in reversed(tail) if not _NUM_ITEM_RE.match(line)), ""
     )
-    if _CONFIRM_RE.search(closing.strip()):
+    # "Which file should I keep?" asks for a choice, not a yes: judge the last sentence only.
+    ask = re.split(r"(?<=[.!])\s+", closing.strip())[-1]
+    if _CONFIRM_RE.search(ask) and not _OPEN_QUESTION_RE.match(ask):
         add("Yes, go ahead", "confirm")
 
     return out
