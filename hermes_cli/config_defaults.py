@@ -2332,20 +2332,13 @@ DEFAULT_CONFIG = {
     "telemetry": {
         "shared_metrics": {
             "enabled": False,
-            # Requires `enabled` (`send` alone logs an error). A package is sent only if its whole
-            # period is inside a recorded consent window.
+            # Requires `enabled` (`send` alone logs an error); a package is sent only if its whole period is inside a recorded consent window.
             "send": False,
-            # Ingest endpoint (override for staging/local). Deliberately NOT env- overridable.
-            # Non-HTTPS refused unless the host is localhost.
+            # Ingest endpoint (override for staging/local). Deliberately NOT env- overridable; non-HTTPS refused unless the host is localhost.
             "endpoint": "https://telemetry.nousresearch.com/v1/telemetry",
         },
-        # Local execution traces (hermes_cli/observability/relay_traces.py): Relay events per session,
-        # written under <home>/traces for the desktop Agents view and `hermes trace`. Nothing is sent.
-        "traces": {
-            "enabled": True,
-            # Trace files untouched this long are deleted when the profile's first session opens.
-            "retention_days": 30,
-        },
+        # Local Relay execution traces (relay_traces.py) under <home>/traces: desktop Agents view + `hermes trace`.
+        "traces": {"enabled": True, "retention_days": 30},
     },
 
     "doctor": {
