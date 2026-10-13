@@ -53,6 +53,194 @@ const hueFor = (status?: string) => (status && STATUS_HUE[status]) || 'var(--sce
  *  for free. */
 const packetDur = '4.4s'
 
+/** The droplet crossing an active wire: its glass gradient and the ellipse
+ *  that rides the path, one object wherever it rides. */
+function PacketBead({ beadId, isLoop, path }: { beadId: string; isLoop: boolean; path: string }) {
+  return (
+    <>
+      <defs>
+        {/* What makes it read as liquid rather than as a bead.
+
+            The ramp runs the opposite way to a lit solid. A sphere is
+            brightest where the light hits and falls off to a dark edge —
+            which is a pearl, or an egg. Water is the inverse: the middle is
+            nearly clear because you're looking straight through it, and the
+            perimeter is where it goes bright, because at a glancing angle
+            the surface turns reflective and light caught inside can't
+            escape. Density at the rim, transparency in the body.
+
+            `fx`/`fy` pull the clear part off-centre so the two halves aren't
+            the same. Near the light the wall is thin; opposite it the ramp
+            piles up into the fat bright crescent a droplet focuses onto its
+            own far side. One focal offset does all of that, with no second
+            shape to keep in sync with the motion — at this size a separate
+            specular would land under a pixel anyway, which is the same
+            reason the droplet is an ellipse and not a hand-drawn teardrop.
+
+            Object-bounding-box units, so the ramp stretches with the rx/ry
+            deformation below instead of sliding across a shape that's
+            changing under it. `rotate="auto"` then keeps the thin edge
+            facing the direction of travel for the whole trip.
+
+            Deliberately NOT tinted per wire, for the same reason the fill
+            never was: the packet is one object wherever it rides, and the
+            wire under it already says which kind of hop this is. */}
+        <radialGradient cx="50%" cy="50%" fx="34%" fy="28%" id={beadId} r="50%">
+          {/* Almost nothing through the body — the wire underneath should
+              read straight through it. Only the last quarter has any weight,
+              and even the rim stops short of opaque, so the droplet is a
+              curve of light rather than an object with a fill. */}
+          <stop offset="0%" stopColor="var(--packet-glass)" stopOpacity="0.025" />
+          <stop offset="52%" stopColor="var(--packet-glass)" stopOpacity="0.055" />
+          <stop offset="78%" stopColor="var(--packet-glass)" stopOpacity="0.17" />
+          <stop offset="93%" stopColor="var(--packet-glass)" stopOpacity="0.42" />
+          {/* Feathered rather than cut, so a 3px shape doesn't alias into a
+              sawtooth ring as it turns. */}
+          <stop offset="100%" stopColor="var(--packet-glass)" stopOpacity="0.14" />
+        </radialGradient>
+      </defs>
+      {/* A droplet, not a dot. Two things make it read as liquid:
+       *
+       *  1. `rotate="auto"` turns the shape to the path tangent, so its long
+       *     axis is always the direction of travel — through the loop-back's
+       *     deep belly it banks with the curve instead of sliding sideways.
+       *  2. rx/ry animate against each other over the trip: compact leaving
+       *     the source, drawn out across the span, gathering back up as it
+       *     lands. Area is held roughly constant (rx*ry ≈ r²) so it reads as
+       *     one body of water deforming, not as a thing resizing.
+       *
+       * The motion itself is deliberately unspecified beyond dur/path.
+       * Easing it with keyPoints/keySplines (the textbook way) stopped the
+       * droplet short of the target — the packet has to arrive, so the
+       * stretch cycle carries the sense of pace instead.
+       *
+       * Ellipse rather than a teardrop path: at r=3 on a canvas sitting
+       * around 0.6 zoom, the asymmetric taper of a real droplet is smaller
+       * than a pixel — the elongation is the whole signal, and an ellipse
+       * gets it without hand-authoring a shape per edge. */}
+      <ellipse className={`packet ${isLoop ? 'packet-loop' : ''}`} fill={`url(#${beadId})`} rx={3} ry={3}>
+        <animate
+          attributeName="rx"
+          calcMode="spline"
+          dur={packetDur}
+          keySplines=".4 0 .6 1;.4 0 .6 1;.4 0 .6 1;.4 0 .6 1"
+          keyTimes="0;0.12;0.5;0.88;1"
+          repeatCount="indefinite"
+          values="3;3.1;5.6;3.1;3"
+        />
+        <animate
+          attributeName="ry"
+          calcMode="spline"
+          dur={packetDur}
+          keySplines=".4 0 .6 1;.4 0 .6 1;.4 0 .6 1;.4 0 .6 1"
+          keyTimes="0;0.12;0.5;0.88;1"
+          repeatCount="indefinite"
+          values="3;2.9;1.7;2.9;3"
+        />
+        <animateMotion dur={packetDur} path={path} repeatCount="indefinite" rotate="auto" />
+      </ellipse>
+    </>
+  )
+}
+
+/** The wire's own toolbar — n8n's one and only way to cut a connection, and
+ *  the reason theirs feels solved: the control is on the thing it acts on,
+ *  at the place you were already looking.
+ *
+ *  Splicing is offered on forward hops only. The loop-back is held out of
+ *  Dagre (it's what makes the graph a DAG to lay out), so a step dropped into
+ *  it would have no rank to be placed in and would land on the origin — and
+ *  a hop shorter than a rank gap has no middle, so the + would sit on a
+ *  port. Cutting is offered on every wire, including those two: a wire you
+ *  can't delete is a worse problem than a wire you can't split. */
+function EdgeToolbar({
+  addStep,
+  canSplice,
+  cool,
+  cutEdge,
+  hot,
+  id,
+  midX,
+  midY,
+  wake
+}: {
+  addStep: ReturnType<typeof useAddStep>
+  canSplice: boolean
+  cool: () => void
+  cutEdge: (edgeId: string) => void
+  hot: boolean
+  id: string
+  midX: number
+  midY: number
+  wake: () => void
+}) {
+  return (
+    <EdgeLabelRenderer>
+      {/* Placement and hover-grow are both transforms, and CSS applies the
+          standalone `scale` property BEFORE `transform` — a scale here would
+          multiply the translate that positions the group and fling it down
+          the wire. The group places; the buttons draw. */}
+      <div
+        className={`edge-tools${hot ? ' hot' : ''}`}
+        onMouseEnter={wake}
+        onMouseLeave={cool}
+        style={{ transform: `translate(-50%, -50%) translate(${midX}px, ${midY}px)` }}
+      >
+        {/* At rest the wire wears a bead, not a button. A + on every hop was
+            a row of buttons across the graph all promising something, when
+            only the one you're pointing at is offered anything. The bead
+            says "there's something here" and costs a wire's worth of ink;
+            the actions bloom out of it. */}
+        <span aria-hidden="true" className="edge-nub" />
+        <div className="edge-acts">
+          {canSplice && (
+            <Tip label="Add a step here">
+              <button
+                aria-label="Add a step here"
+                className="edge-add"
+                onClick={e => {
+                  e.stopPropagation()
+                  addStep({ on: 'edge', edgeId: id, at: { x: midX, y: midY } })
+                }}
+                onPointerDown={e => e.stopPropagation()}
+                tabIndex={hot ? 0 : -1}
+                type="button"
+              >
+                {/* Inline SVG, not the codicon font. The glyph box centres
+                    perfectly (measured 1.74px on all four sides) but the +
+                    INSIDE the font's em box sits optically low-left at this
+                    size — icon fonts are drawn on a 16px grid and their
+                    bearings don't survive a 9.86px button on fractional
+                    pixels. A vector crosshair is geometry: two strokes through
+                    the exact middle of the viewBox, centred by construction at
+                    every zoom. */}
+                <svg aria-hidden="true" className="edge-add-glyph" viewBox="0 0 10 10">
+                  <path d="M5 1.5 V8.5 M1.5 5 H8.5" />
+                </svg>
+              </button>
+            </Tip>
+          )}
+          <Tip label="Delete this wire">
+            <button
+              aria-label="Delete this wire"
+              className="edge-cut"
+              onClick={e => {
+                e.stopPropagation()
+                cutEdge(id)
+              }}
+              onPointerDown={e => e.stopPropagation()}
+              tabIndex={hot ? 0 : -1}
+              type="button"
+            >
+              <Codicon name="trash" size={9} />
+            </button>
+          </Tip>
+        </div>
+      </div>
+    </EdgeLabelRenderer>
+  )
+}
+
 export function DataEdge(props: EdgeProps) {
   const { id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data } = props
 
@@ -193,166 +381,18 @@ export function DataEdge(props: EdgeProps) {
         stroke="transparent"
         strokeWidth={40}
       />
-      {active && (
-        <defs>
-          {/* What makes it read as liquid rather than as a bead.
-
-              The ramp runs the opposite way to a lit solid. A sphere is
-              brightest where the light hits and falls off to a dark edge —
-              which is a pearl, or an egg. Water is the inverse: the middle is
-              nearly clear because you're looking straight through it, and the
-              perimeter is where it goes bright, because at a glancing angle
-              the surface turns reflective and light caught inside can't
-              escape. Density at the rim, transparency in the body.
-
-              `fx`/`fy` pull the clear part off-centre so the two halves aren't
-              the same. Near the light the wall is thin; opposite it the ramp
-              piles up into the fat bright crescent a droplet focuses onto its
-              own far side. One focal offset does all of that, with no second
-              shape to keep in sync with the motion — at this size a separate
-              specular would land under a pixel anyway, which is the same
-              reason the droplet is an ellipse and not a hand-drawn teardrop.
-
-              Object-bounding-box units, so the ramp stretches with the rx/ry
-              deformation below instead of sliding across a shape that's
-              changing under it. `rotate="auto"` then keeps the thin edge
-              facing the direction of travel for the whole trip.
-
-              Deliberately NOT tinted per wire, for the same reason the fill
-              never was: the packet is one object wherever it rides, and the
-              wire under it already says which kind of hop this is. */}
-          <radialGradient cx="50%" cy="50%" fx="34%" fy="28%" id={beadId} r="50%">
-            {/* Almost nothing through the body — the wire underneath should
-                read straight through it. Only the last quarter has any weight,
-                and even the rim stops short of opaque, so the droplet is a
-                curve of light rather than an object with a fill. */}
-            <stop offset="0%" stopColor="var(--packet-glass)" stopOpacity="0.025" />
-            <stop offset="52%" stopColor="var(--packet-glass)" stopOpacity="0.055" />
-            <stop offset="78%" stopColor="var(--packet-glass)" stopOpacity="0.17" />
-            <stop offset="93%" stopColor="var(--packet-glass)" stopOpacity="0.42" />
-            {/* Feathered rather than cut, so a 3px shape doesn't alias into a
-                sawtooth ring as it turns. */}
-            <stop offset="100%" stopColor="var(--packet-glass)" stopOpacity="0.14" />
-          </radialGradient>
-        </defs>
-      )}
-      {active && (
-        // A droplet, not a dot. Two things make it read as liquid:
-        //
-        //  1. `rotate="auto"` turns the shape to the path tangent, so its long
-        //     axis is always the direction of travel — through the loop-back's
-        //     deep belly it banks with the curve instead of sliding sideways.
-        //  2. rx/ry animate against each other over the trip: compact leaving
-        //     the source, drawn out across the span, gathering back up as it
-        //     lands. Area is held roughly constant (rx*ry ≈ r²) so it reads as
-        //     one body of water deforming, not as a thing resizing.
-        //
-        // The motion itself is deliberately unspecified beyond dur/path.
-        // Easing it with keyPoints/keySplines (the textbook way) stopped the
-        // droplet short of the target — the packet has to arrive, so the
-        // stretch cycle carries the sense of pace instead.
-        //
-        // Ellipse rather than a teardrop path: at r=3 on a canvas sitting
-        // around 0.6 zoom, the asymmetric taper of a real droplet is smaller
-        // than a pixel — the elongation is the whole signal, and an ellipse
-        // gets it without hand-authoring a shape per edge.
-        <ellipse className={`packet ${isLoop ? 'packet-loop' : ''}`} fill={`url(#${beadId})`} rx={3} ry={3}>
-          <animate
-            attributeName="rx"
-            calcMode="spline"
-            dur={packetDur}
-            keySplines=".4 0 .6 1;.4 0 .6 1;.4 0 .6 1;.4 0 .6 1"
-            keyTimes="0;0.12;0.5;0.88;1"
-            repeatCount="indefinite"
-            values="3;3.1;5.6;3.1;3"
-          />
-          <animate
-            attributeName="ry"
-            calcMode="spline"
-            dur={packetDur}
-            keySplines=".4 0 .6 1;.4 0 .6 1;.4 0 .6 1;.4 0 .6 1"
-            keyTimes="0;0.12;0.5;0.88;1"
-            repeatCount="indefinite"
-            values="3;2.9;1.7;2.9;3"
-          />
-          <animateMotion dur={packetDur} path={path} repeatCount="indefinite" rotate="auto" />
-        </ellipse>
-      )}
-
-      {/* The wire's own toolbar — n8n's one and only way to cut a connection,
-          and the reason theirs feels solved: the control is on the thing it
-          acts on, at the place you were already looking.
-
-          Splicing is offered on forward hops only. The loop-back is held out
-          of Dagre (it's what makes the graph a DAG to lay out), so a step
-          dropped into it would have no rank to be placed in and would land on
-          the origin — and a hop shorter than a rank gap has no middle, so the
-          + would sit on a port. Cutting is offered on every wire, including
-          those two: a wire you can't delete is a worse problem than a wire you
-          can't split. */}
-      <EdgeLabelRenderer>
-        {/* Placement and hover-grow are both transforms, and CSS applies the
-            standalone `scale` property BEFORE `transform` — a scale here would
-            multiply the translate that positions the group and fling it down
-            the wire. The group places; the buttons draw. */}
-        <div
-          className={`edge-tools${hot ? ' hot' : ''}`}
-          onMouseEnter={wake}
-          onMouseLeave={cool}
-          style={{ transform: `translate(-50%, -50%) translate(${midX}px, ${midY}px)` }}
-        >
-          {/* At rest the wire wears a bead, not a button. A + on every hop was
-              a row of buttons across the graph all promising something, when
-              only the one you're pointing at is offered anything. The bead
-              says "there's something here" and costs a wire's worth of ink;
-              the actions bloom out of it. */}
-          <span aria-hidden="true" className="edge-nub" />
-          <div className="edge-acts">
-            {canSplice && (
-              <Tip label="Add a step here">
-                <button
-                  aria-label="Add a step here"
-                  className="edge-add"
-                  onClick={e => {
-                    e.stopPropagation()
-                    addStep({ on: 'edge', edgeId: id, at: { x: midX, y: midY } })
-                  }}
-                  onPointerDown={e => e.stopPropagation()}
-                  tabIndex={hot ? 0 : -1}
-                  type="button"
-                >
-                  {/* Inline SVG, not the codicon font. The glyph box centres
-                      perfectly (measured 1.74px on all four sides) but the +
-                      INSIDE the font's em box sits optically low-left at this
-                      size — icon fonts are drawn on a 16px grid and their
-                      bearings don't survive a 9.86px button on fractional
-                      pixels. A vector crosshair is geometry: two strokes through
-                      the exact middle of the viewBox, centred by construction at
-                      every zoom. */}
-                  <svg aria-hidden="true" className="edge-add-glyph" viewBox="0 0 10 10">
-                    <path d="M5 1.5 V8.5 M1.5 5 H8.5" />
-                  </svg>
-                </button>
-              </Tip>
-            )}
-            <Tip label="Delete this wire">
-              <button
-                aria-label="Delete this wire"
-                className="edge-cut"
-                onClick={e => {
-                  e.stopPropagation()
-                  cutEdge(id)
-                }}
-                onPointerDown={e => e.stopPropagation()}
-                tabIndex={hot ? 0 : -1}
-                type="button"
-              >
-                <Codicon name="trash" size={9} />
-              </button>
-            </Tip>
-          </div>
-        </div>
-      </EdgeLabelRenderer>
+      {active && <PacketBead beadId={beadId} isLoop={isLoop} path={path} />}
+      <EdgeToolbar
+        addStep={addStep}
+        canSplice={canSplice}
+        cool={cool}
+        cutEdge={cutEdge}
+        hot={hot}
+        id={id}
+        midX={midX}
+        midY={midY}
+        wake={wake}
+      />
     </>
   )
 }
