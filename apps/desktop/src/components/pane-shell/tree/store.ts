@@ -47,7 +47,7 @@ import {
 import { isTreePaneParked } from './parked-panes'
 import { FLOATING_PLACEMENT } from './renderer/floating-rect'
 import { tabStripVisibleForZone } from './renderer/strip-visibility'
-import { persist, scrubEphemeralPanes } from './store-persist'
+import { encodeStoredTree, persist, scrubEphemeralPanes } from './store-persist'
 
 // v2: v1 trees were saved against placeholder panes with index-order zone
 // assignment (chat could land in a corner cell). Retire them wholesale.
@@ -61,15 +61,19 @@ const defaultTrees: Record<InterfaceMode, LayoutNode | null> = { advanced: null,
 export const $layoutTree = modeLayout.atom<LayoutNode | null>(
   LAYOUT_KEYS.tree,
   () => defaultTrees[modeLayout.mode],
-  Codecs.json(parsed =>
-    // Canonicalize on load (see migratePersistedTree), then scrub ephemeral
-    // tile panes: trees written by older builds (before persist() scrubbed
-    // them) heal on their next boot instead of re-arranging around ghost
-    // preview tiles.
-    isLayoutNode(parsed)
-      ? (scrubEphemeralPanes(normalize(migratePersistedTree(parsed))) ?? defaultTrees[modeLayout.mode])
-      : defaultTrees[modeLayout.mode]
-  ),
+  {
+    ...Codecs.json<LayoutNode | null>(parsed =>
+      // Canonicalize on load (see migratePersistedTree), then scrub ephemeral
+      // tile panes: trees written by older builds (before persist() scrubbed
+      // them) heal on their next boot instead of re-arranging around ghost
+      // preview tiles.
+      isLayoutNode(parsed)
+        ? (scrubEphemeralPanes(normalize(migratePersistedTree(parsed))) ?? defaultTrees[modeLayout.mode])
+        : defaultTrees[modeLayout.mode]
+    ),
+    // The mode-switch capture writes through the codec, not persist().
+    encode: encodeStoredTree
+  },
   true
 )
 

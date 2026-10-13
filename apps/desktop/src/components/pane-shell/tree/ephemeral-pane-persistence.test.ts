@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LayoutNode } from '@/components/pane-shell/tree/model'
-import { PREVIEW_TILE_PREFIX } from '@/store/preview-explicit'
+import { PREVIEW_TILE_PREFIX } from '@/store/preview-tile-id'
 
 // The drift test below imports the preview tile watcher to exercise REAL
 // id minting. Its render/console leaves are never invoked there (the mirror
@@ -164,8 +164,8 @@ describe('ephemeral preview panes are scrubbed from the persisted tree', () => {
 
     const { isEphemeralPane } = await import('@/components/pane-shell/tree/store-persist')
 
-    // One definition: the scrubber keys off `store/preview-explicit`'s prefix,
-    // not a second copy of the literal.
+    // One definition: the scrubber keys off the same prefix the preview tile
+    // mints from (`store/preview-tile-id`), not a second copy of the literal.
     expect(isEphemeralPane(`${PREVIEW_TILE_PREFIX}:file:notes`)).toBe(true)
     expect(isEphemeralPane('workspace')).toBe(false)
     expect(isEphemeralPane('route-tile:/skills')).toBe(false)
@@ -244,5 +244,42 @@ describe('ephemeral preview panes are scrubbed from the persisted tree', () => {
 
     tree.persistTree()
     expect(model.allPaneIds(storedTree()!)).not.toContain('preview-tile:url:browser')
+  })
+
+  it('switching interface mode stores the scrubbed tree, not the live one', async () => {
+    const { model, registerPreview, tree } = await setup()
+
+    registerPreview('preview-tile:file:notes')
+    expect(model.allPaneIds(tree.$layoutTree.get()!)).toContain('preview-tile:file:notes')
+
+    // The mode switch captures every scoped atom through its codec: a second
+    // writer next to persist(), and it must apply the same policy.
+    const { setInterfaceMode } = await import('@/store/interface-mode')
+
+    setInterfaceMode('simple')
+
+    expect(model.allPaneIds(storedTree()!)).toEqual(['workspace'])
+  })
+
+  it('a stored tree heals on load whichever module loads first', async () => {
+    const { model } = await setup()
+
+    window.localStorage.setItem(
+      TREE_KEY,
+      JSON.stringify(
+        model.split('row', [
+          model.group(['workspace'], { id: 'grp-main' }),
+          model.group(['preview-tile:artifact:ghost'], { id: 'grp-ghost' })
+        ])
+      )
+    )
+
+    // The preview store graph loads ahead of the tree store: the load-time
+    // scrub must not depend on which side of the graph evaluates first.
+    vi.resetModules()
+    await import('@/store/preview-explicit')
+    const tree = await import('@/components/pane-shell/tree/store')
+
+    expect(model.allPaneIds(tree.$layoutTree.get()!)).toEqual(['workspace'])
   })
 })

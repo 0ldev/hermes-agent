@@ -6,7 +6,7 @@
 
 import { LAYOUT_KEYS } from '@/lib/layout-persistence'
 import { modeLayout } from '@/store/interface-mode'
-import { PREVIEW_TILE_PREFIX } from '@/store/preview-explicit'
+import { PREVIEW_TILE_PREFIX } from '@/store/preview-tile-id'
 import { isBrowserWindow, isSecondaryWindow } from '@/store/windows'
 
 import { allPaneIds, type LayoutNode, removePane } from './model'
@@ -21,12 +21,10 @@ import { allPaneIds, type LayoutNode, removePane } from './model'
  * the STORED copy is scrubbed, and boot adoption re-docks surviving preview
  * tabs at their remembered share (see `rememberPaneShare`).
  *
- * The namespace is OWNED by `store/preview-explicit` — the module the minting
- * side (`preview-tile.tsx`) already imports it from — so the minted id and the
- * ephemeral set are one definition, with no second copy of the literal. Read
- * inside the predicate rather than at module scope: preview-explicit imports
- * back into the tree store graph, and a top-level read would touch its
- * binding before it has initialized.
+ * The prefix lives in the import-free `store/preview-tile-id` leaf, the same
+ * definition the minting side (`preview-tile.tsx`) uses. It must stay off any
+ * cycle with the tree store: `$layoutTree` decodes (and scrubs) while that
+ * module is still evaluating.
  */
 export const isEphemeralPane = (paneId: string): boolean => paneId.startsWith(`${PREVIEW_TILE_PREFIX}:`)
 
@@ -59,6 +57,16 @@ export function scrubEphemeralPanes(tree: LayoutNode | null): LayoutNode | null 
   }
 
   return next
+}
+
+/** The stored form of a tree for the mode-switch capture, which writes every
+ *  scoped atom through its codec rather than through `persist()`. Same scrub;
+ *  a tree that was nothing but ephemeral panes stores as nothing, which loads
+ *  back as the mode's default tree (what the decode heal would give it). */
+export function encodeStoredTree(tree: LayoutNode | null): null | string {
+  const stored = scrubEphemeralPanes(tree)
+
+  return stored ? JSON.stringify(stored) : null
 }
 
 export function persist(tree: LayoutNode | null) {
