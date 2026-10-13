@@ -14,6 +14,7 @@ import {
   setCurrentFastMode,
   setCurrentPersonality,
   setCurrentReasoningEffort,
+  setCurrentReasoningEffortSource,
   setCurrentServiceTier,
   setDefaultReasoningEffort,
   setIntroPersonality
@@ -124,6 +125,10 @@ export function useHermesConfig({ activeSessionIdRef }: HermesConfigOptions) {
           }
 
           setCurrentReasoningEffort(reasoning)
+          // The seeded level mirrors config — mark it default-sourced so
+          // session.create never ships it as an explicit override (#87036);
+          // only an explicit composer pick is 'manual'.
+          setCurrentReasoningEffortSource('default')
           setCurrentFastMode(tier === 'priority' || tier === 'ultrafast')
           setCurrentServiceTier(tier)
         }
