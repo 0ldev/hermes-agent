@@ -527,33 +527,23 @@ venv and the checkout, never the home directory.
 
 ### Dependency security policy
 
-Hermes checks the age of **its own** dependencies when it locks them: the checkout's
-`[tool.uv] exclude-newer = "3 days"` keeps any release younger than three days out of `uv.lock`,
-so a hijacked upload has time to be caught upstream before it reaches users. Users install from
-that vetted lock; their machines never re-check dates. **The check does not apply to your
-plugin's dependencies.** When Hermes resolves your plugin into its environment, Hermes's exact
-pins stay put, other packages Hermes uses may move within the ranges Hermes declares, and
-everything else follows your requirements, so a plugin can floor on a release published
-yesterday and install today. The plugin's author, not Hermes, is responsible for what that pulls
-in. A plugin that requires a different version of a package Hermes pins exactly fails to install
-until Hermes's pin moves.
+Hermes holds every Python dependency, its own and catalog plugins', to the same rule: an exact
+version, released at least three days ago. A hijacked upload is usually caught upstream within
+days, so the wait keeps it from reaching users.
 
-Set your own policy and hold yourself to it. Strongly recommended:
+For catalog plugins the check runs once, at admission. Every requirement in your `pyproject.toml`
+`[project].dependencies` (or manifest `python_dependencies`) must pin one version with `==`, and
+that release must be at least three days old on PyPI when you submit the entry or a SHA bump.
+Catalog CI runs `hermes plugins validate --install-deps --release-age` and names each failing pin
+with the date it becomes eligible; run the same command locally before you open the PR. Users'
+machines never look up release dates (many package mirrors publish none), so the pins you submit
+are exactly what users install.
 
-- **Upper bounds on every dependency** — `>=floor,<next_major` for stable packages,
-  `>=0.29,<0.32` for pre-1.0 ones. A bare `>=X.Y` adopts every future release unreviewed.
-- **Floor on the oldest API-compatible version**, not the release of the week. A floor on a
-  fresh wheel forces every installer onto it the day it appears; `>=old,!=broken,<next` keeps the
-  wide range and skips the one bad release.
-- **Adopt a release-age check of your own**: wait a few days before floors move to a new
-  release, and resolve with `uv --exclude-newer "3 days"` (or `UV_EXCLUDE_NEWER`) in your own CI so
-  the lock you test is the one users get.
-- **Pin your lock, review your bumps.** Treat a dependency bump as a code change: read the
-  upstream diff, then re-pin.
-
-The plugin catalog review reads your dependency list at the pinned SHA (`plugin.yaml` or
-`pyproject.toml`) and flags bare floors and missing bounds; an entry is not held for a floor that
-is merely recent.
+When Hermes resolves your plugin into its environment, Hermes's exact pins stay put and other
+packages Hermes uses may move within the ranges Hermes declares. A plugin that requires a
+different version of a package Hermes pins exactly fails to install until Hermes's pin moves.
+Treat a dependency bump as a code change: read the upstream diff, wait out the three days, then
+re-pin and bump the catalog SHA.
 
 ## Step 3: Write the tool schemas
 

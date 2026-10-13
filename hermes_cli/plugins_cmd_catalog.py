@@ -781,9 +781,11 @@ def cmd_info(name: str) -> None:
     console.print()
 
 
-def cmd_validate(path: str, as_json: bool = False, install_deps: bool = False) -> None:
+def cmd_validate(path: str, as_json: bool = False, install_deps: bool = False,
+                 release_age: bool = False) -> None:
     """Catalog-admission validation of a plugin directory (the CI gate); exits 0/1. *install_deps*
-    installs the declared Python deps first so the capability probe imports what an install would."""
+    installs the declared Python deps first so the capability probe imports what an install would;
+    *release_age* requires exact pins on PyPI releases at least three days old (catalog rule 10)."""
     from hermes_cli.plugin_validate import validate_plugin_dir
     from hermes_cli.plugins_cmd import _console
     probe = None
@@ -802,6 +804,9 @@ def cmd_validate(path: str, as_json: bool = False, install_deps: bool = False) -
         except Exception as exc:  # validation still runs; the probe reports what is missing
             print(f"dependency preparation failed: {exc}", file=sys.stderr)
     report = validate_plugin_dir(Path(path), probe)
+    if release_age:
+        from hermes_cli.plugin_validate_dep_age import check_dependency_age
+        check_dependency_age(report, Path(path))
     if as_json:
         print(json.dumps(report.to_dict(), indent=2))
         sys.exit(report.exit_code)

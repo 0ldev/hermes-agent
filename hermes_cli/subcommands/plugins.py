@@ -63,6 +63,10 @@ def build_plugins_parser(subparsers, *, cmd_plugins: Callable) -> None:
         "--install-deps", action="store_true",
         help="Install the plugin's declared Python dependencies (pyproject/python_dependencies) into this "
              "venv before the capability probe, exactly as `plugins install` would — the catalog CI gate")
+    plugins_validate.add_argument(
+        "--release-age", action="store_true",
+        help="Require every Python dependency to be an exact pin (==) on a PyPI release at least three "
+             "days old (catalog rule 10; reads release dates from pypi.org) — the catalog CI gate")
     add_json_flag(plugins_validate, "Print machine-readable JSON (for CI)")
 
     plugins_update = plugins_subparsers.add_parser(

@@ -25,5 +25,7 @@ cutoff (`pm/workspace.py::_without_release_age`), so a mirror without upload tim
 install (#135589). Plugin resolution is unchanged by this: core's exact pins stay put, and a plugin
 may move a transitive core package within core's declared ranges
 (`tests/pm/test_workspace_build_inputs.py::test_plugin_can_move_compatible_transitive_but_not_exact_requirement`).
-Plugin `python_dependencies` follow the plugin's own policy. Teknium's rulings: "plugins dont have to abide by our 14 day rule … Only hermes'
-dependencies themselves have to"; dates are checked by us, not users; pinned deps need >3 days.
+Plugin deps follow the same 3-day rule, checked ONCE at catalog admission (catalog rule 10,
+`hermes_cli/plugin_validate_dep_age.py`, `hermes plugins validate --release-age` in catalog CI):
+exact `==` pins on PyPI releases at least 3 days old. Teknium's ruling: dates are checked by us
+(lock time for core, admission for plugins), never on users' machines; 3 days, not 14.

@@ -256,7 +256,9 @@ jobs:
             fi
 
             # Manifest schema + declared-vs-registered capability check.
-            if ! timeout 600 hermes plugins validate --install-deps "$PLUGIN_DIR" </dev/null; then
+            # --release-age: catalog rule 10, exact pins on releases >= 3 days old. Users'
+            # machines never check dates, so this admission check is the only one.
+            if ! timeout 600 hermes plugins validate --install-deps --release-age "$PLUGIN_DIR" </dev/null; then
               echo "::error file=$entry::hermes plugins validate failed"
               FAILED=1; echo "::endgroup::"; continue
             fi

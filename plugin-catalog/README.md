@@ -69,17 +69,17 @@ meaningful:
    undocumented core module, by file and line. If the hook you need does not
    exist, open an issue describing it: we would rather add the seam than list
    a patch.
-10. **Dependency security policy is the plugin's.** Hermes's 3-day
-   `exclude-newer` release-age check covers Hermes's own dependencies only, at
-   the time Hermes locks them; a plugin's `python_dependencies` /
-   `pyproject.toml` install under the plugin's policy (no age check), inside
-   Hermes's core constraints: Hermes's exact pins cannot move. Reviewers read the
-   dependency list at the pinned SHA: bare floors (`>=X` with no upper bound)
-   and floors on the newest release get a request for the oldest
-   API-compatible floor plus an upper bound, and authors are strongly
-   recommended to run their own release quarantine (`uv --exclude-newer` in
-   their CI) — see the developer guide's *Dependency security policy*. A
-   recent floor alone is not grounds to hold an entry.
+10. **Python dependencies are exact pins on releases at least 3 days old.**
+   Every `pyproject.toml` `[project].dependencies` / `python_dependencies`
+   entry names one version with `==` (`requests==2.32.4`), and that release
+   must have been on PyPI for at least three days when the entry or SHA bump
+   is submitted. Catalog CI enforces it (`hermes plugins validate
+   --release-age`) and names each failing pin with its release date and the
+   date it becomes eligible. This admission check is the only one: users'
+   machines never look up release dates, so the catalog has to vet the exact
+   versions they will install. The same 3-day rule holds Hermes's own
+   dependencies, checked when Hermes locks them. Applies to new entries and
+   SHA bumps; entries already listed are re-checked on their next bump.
 
 11. **Credentials come through Hermes, never from files.** A plugin gets
    secrets only through Hermes's routes. Its declared `requires_env` and

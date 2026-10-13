@@ -1081,7 +1081,8 @@ _PLUGIN_ACTIONS = {
         getattr(args, "term", "") or "", json_output=getattr(args, "json", False)),
     "browse": lambda args: _catalog().cmd_search(""),
     "validate": lambda args: _catalog().cmd_validate(
-        args.path, as_json=getattr(args, "json", False), install_deps=getattr(args, "install_deps", False)),
+        args.path, as_json=getattr(args, "json", False), install_deps=getattr(args, "install_deps", False),
+        release_age=getattr(args, "release_age", False)),
     "update": lambda args: cmd_update(args.name),
     "adopt": lambda args: cmd_adopt(args.name),
     "trust-update-url": lambda args: cmd_trust_update_url(args.name),
