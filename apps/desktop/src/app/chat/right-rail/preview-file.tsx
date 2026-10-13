@@ -748,6 +748,39 @@ export function SourceView({ filePath, language, text }: { filePath?: string; la
 
 export type PreviewViewMode = 'diff' | 'rendered' | 'source'
 
+/** The view switcher's modes (left→right) and the active one. `rendersInline`:
+ *  the file pane draws `rendered` itself (Markdown, CSV/TSV table);
+ *  `htmlRendered`: the pane owns `rendered` (live HTML). */
+function planPreviewModes({
+  hasDiff,
+  htmlRendered,
+  rendersInline,
+  userMode
+}: {
+  hasDiff: boolean
+  htmlRendered: boolean
+  rendersInline: boolean
+  userMode: null | PreviewViewMode
+}): { mode: PreviewViewMode; modes: PreviewViewMode[] } {
+  const modes: PreviewViewMode[] = [
+    ...(rendersInline || htmlRendered ? (['rendered'] as const) : []),
+    'source',
+    ...(hasDiff ? (['diff'] as const) : [])
+  ]
+
+  if (userMode && modes.includes(userMode)) {
+    return { mode: userMode, modes }
+  }
+
+  // The pane hands an HTML file over only once Source was picked; that pick
+  // outranks the diff-first default.
+  if (htmlRendered) {
+    return { mode: 'source', modes }
+  }
+
+  return { mode: hasDiff ? 'diff' : rendersInline ? 'rendered' : 'source', modes }
+}
+
 export function LocalFilePreview({
   onClose,
   onSelectRendered,
@@ -1214,26 +1247,14 @@ export function LocalFilePreview({
   }
 
   if (isText && state.text !== undefined) {
-    const isMarkdown = (state.language || target.language) === 'markdown'
     const tableDelimiter = tableDelimiterForPath(filePath)
-    const hasDiff = Boolean(state.diff && state.diff.trim())
-    // Order the toggle reads left→right; default lands on the most useful view.
-    const modes: PreviewViewMode[] = []
 
-    if (isMarkdown || tableDelimiter || onSelectRendered) {
-      modes.push('rendered')
-    }
-
-    modes.push('source')
-
-    if (hasDiff) {
-      modes.push('diff')
-    }
-
-    const autoMode: PreviewViewMode = hasDiff ? 'diff' : isMarkdown || tableDelimiter ? 'rendered' : 'source'
-    // The pane hands an HTML file over only once Source was picked; that pick
-    // outranks the diff-first default.
-    const mode = userMode && modes.includes(userMode) ? userMode : onSelectRendered ? 'source' : autoMode
+    const { mode, modes } = planPreviewModes({
+      hasDiff: Boolean(state.diff && state.diff.trim()),
+      htmlRendered: Boolean(onSelectRendered),
+      rendersInline: (state.language || target.language) === 'markdown' || Boolean(tableDelimiter),
+      userMode
+    })
 
     const selectMode = (next: PreviewViewMode) => {
       if (next === 'rendered' && onSelectRendered) {
