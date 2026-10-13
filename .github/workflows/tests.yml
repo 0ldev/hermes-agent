@@ -47,7 +47,7 @@ jobs:
         slice: [1, 2]
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Install ripgrep (prebuilt binary)
         run: |
@@ -140,7 +140,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Set up locked Python, Node and test dependencies
         # toolchain: all puts PM's locked Node in the runner's PM store, not
@@ -237,7 +237,7 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           # The clean-worktree step below loads its action from the checkout.
           sparse-checkout: |
@@ -282,7 +282,7 @@ jobs:
         shard: ${{ fromJSON(needs.e2e-upgrade-plan.outputs.shards) }}
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@v1 # v7.0.1
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           # N-1 = `git describe --tags --abbrev=0 HEAD~1`.
           fetch-depth: 0
