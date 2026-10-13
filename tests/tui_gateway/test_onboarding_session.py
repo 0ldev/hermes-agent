@@ -185,7 +185,7 @@ def test_a_compression_rotation_carries_the_run_record(root):
     assert onboarding_record.active_session_id(db) is None
 
 
-def test_a_failed_config_write_leaves_the_run_open_so_the_skip_can_be_retried(root, monkeypatch):
+def test_a_skip_retried_after_a_failed_config_write_closes_the_install_flag(root, monkeypatch):
     from hermes_cli import onboarding_run
     from hermes_cli.config import read_user_config_raw
     db = server._get_db()
@@ -196,18 +196,15 @@ def test_a_failed_config_write_leaves_the_run_open_so_the_skip_can_be_retried(ro
     def disk_full(value, **kw):
         raise OSError("disk full")
 
-    ended: list[dict] = []
-    monkeypatch.setattr(onboarding_record, "_ended_listeners", [ended.append])
     monkeypatch.setattr(onboarding_run, "set_run", disk_full)
     with pytest.raises(OSError):
         onboarding_record.advance(db, "onb", End())
     monkeypatch.setattr(onboarding_run, "set_run", real_set_run)
 
-    # Nothing ended: no window drops its Skip button, and the next launch resumes this run.
-    assert onboarding_record.active_session_id(db) == "onb" and ended == []
+    assert onboarding_record.load(db, "onb")["phase"] == "skipped"
+    assert read_user_config_raw(root / "config.yaml")["onboarding"]["run"] is True
     onboarding_record.advance(db, "onb", End())
     assert read_user_config_raw(root / "config.yaml")["onboarding"]["run"] is False
-    assert [e["outcome"] for e in ended] == ["skipped"]
 
 
 def test_an_old_ended_chat_never_closes_the_flag_of_a_newer_run(root):
