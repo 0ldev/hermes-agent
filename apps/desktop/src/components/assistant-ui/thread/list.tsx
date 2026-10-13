@@ -21,8 +21,8 @@ import { useComposerSurfaceId } from '@/app/chat/composer/scope'
 import { usePaneLifecycle, usePaneVisible } from '@/components/pane-shell/pane-visibility'
 import { useI18n } from '@/i18n'
 import { messagePaintWeight } from '@/lib/render-weight'
-import { cn } from '@/lib/utils'
 import { useStoreSelector } from '@/lib/use-session-slice'
+import { cn } from '@/lib/utils'
 import {
   $threadScrolledUpBySession,
   COMPOSER_CLEARANCE_SLOT,
@@ -245,6 +245,30 @@ export function shouldApplyLoadIntent(opts: {
   return opts.restoreFromBottom == null || opts.liveKind === 'bottom'
 }
 
+// Whether the landing a cancelled restore leaves behind may be persisted (or
+// even cached) as the session's reading position. The landing is stranded
+// when the restore target never came within the scroll range — content still
+// arriving, or the history the remembered offset points into is exhausted —
+// and the reader never actually moved the viewport. The settle loop parked the
+// view at the top of the bounded render window, so the live metrics describe
+// that clamp, not a place anyone chose to read. Persisting them strands every
+// future open at the same clamp (#131165 measured {fromBottom: 7416.47}
+// reopening 7416px above the live tail, and re-persisting itself on every
+// open). A reader who really moved owns the viewport regardless: their
+// position is real even mid-load.
+export function shouldPersistLanding(opts: {
+  readerOwnsViewport: boolean
+  target: ThreadScrollState
+  scrollHeight: number
+  clientHeight: number
+}): boolean {
+  if (opts.readerOwnsViewport || opts.target.kind !== 'offset') {
+    return true
+  }
+
+  return opts.target.fromBottom <= Math.max(0, opts.scrollHeight - opts.clientHeight)
+}
+
 export function subscribeToThreadForeground(shouldReanchor: () => boolean, onReanchor: () => void): () => void {
   let frameId: number | null = null
   let framePending = false
@@ -286,6 +310,97 @@ export function subscribeToThreadForeground(shouldReanchor: () => boolean, onRea
     frameId = null
     framePending = false
   }
+}
+
+// Live scroll state of the CURRENT session, updated on every scroll event
+// AND on content height changes (ResizeObserver). The RO leg is what keeps
+// the recorded distance-from-bottom honest: async relayout (images,
+// highlight, the budget backfill) changes scrollHeight WITHOUT a scroll
+// event, so a scroll-only cache records a stale offset (the gap #70478's
+// review threads flagged). Both legs write stateFromMetrics(el).
+// Extracted from ThreadMessageListInner so the component stays within its
+// size cap; the body is unchanged.
+function subscribeLiveScrollStateCache(
+  el: HTMLElement,
+  content: HTMLElement,
+  refs: {
+    clearanceRef: { current: HTMLDivElement | null }
+    isRunningRef: { current: boolean }
+    liveScrollStateRef: { current: ThreadScrollState }
+    readerOwnsViewportRef: { current: boolean }
+  }
+): () => void {
+  const { clearanceRef, isRunningRef, liveScrollStateRef, readerOwnsViewportRef } = refs
+
+  // use-stick-to-bottom follows a content resize on the next animation frame,
+  // so a busy streamed turn can grow the content before that callback runs:
+  // the viewport paints at the stale scrollTop, visibly drifting up before
+  // the re-pin (#118482). The RO leg closes that frame, synchronously before
+  // paint.
+  const resizeMetrics = () => readThreadScrollResizeMetrics(el, clearanceRef.current)
+
+  // ponytail: previous-metrics precision is load-bearing — the predicate must
+  // see the frame BEFORE the growth, so a scroll event (which also writes it)
+  // can't leave a stale gap that makes a mid-stream resize look like growth.
+  let previousResizeMetrics = resizeMetrics()
+
+  const update = () => {
+    previousResizeMetrics = resizeMetrics()
+    liveScrollStateRef.current = threadScrollStateFromMetrics(el)
+
+    // Back at the bottom (or a fresh short transcript): the restore may drive again.
+    if (liveScrollStateRef.current.kind === 'bottom') {
+      readerOwnsViewportRef.current = false
+    }
+  }
+
+  const onResize = () => {
+    const nextResizeMetrics = resizeMetrics()
+
+    // Same transcript-only metric as the restore loop: a composer-only resize
+    // (every keystroke) grows the clearance spacer, not the rows, so it is
+    // distinguishable from streamed content. The pre-growth metrics hold the
+    // reader's position, so a reader who scrolled up is never yanked back
+    // (#108941); use-stick-to-bottom stays the single scroll owner otherwise.
+    // An open inline edit holds the viewport (beginEditHold), so its growing
+    // bubble is never followed.
+    if (
+      isRunningRef.current &&
+      !el.hasAttribute('data-editing') &&
+      shouldReapplyFrozenThreadScrollOffset(THREAD_SCROLL_BOTTOM, true, previousResizeMetrics, nextResizeMetrics) &&
+      threadScrollStateFromMetrics({ ...previousResizeMetrics, scrollTop: el.scrollTop }).kind === 'bottom' &&
+      !hasTranscriptTextSelection(el)
+    ) {
+      el.scrollTop = threadScrollTargetTop(THREAD_SCROLL_BOTTOM, nextResizeMetrics)
+    }
+
+    previousResizeMetrics = nextResizeMetrics
+    liveScrollStateRef.current = threadScrollStateFromMetrics(el)
+  }
+
+  el.addEventListener('scroll', update, { passive: true })
+  const observer = new ResizeObserver(onResize)
+  observer.observe(content)
+
+  return () => {
+    el.removeEventListener('scroll', update)
+    observer.disconnect()
+  }
+}
+
+// The storage key a transcript's persisted reading position binds to: the
+// session and profile the list is actually rendering, not whichever Bot most
+// recently changed the global profile. Visibility changes do not transfer
+// ownership. Extracted from ThreadMessageListInner so the component stays
+// within its size cap; the logic is unchanged.
+function useThreadScrollStorageKey(sessionKey: string | null | undefined, profile: string | undefined) {
+  const [owner, setOwner] = useState(() => ({ sessionKey, profile, storageKey: threadScrollStorageKey(profile) }))
+
+  if (owner.sessionKey !== sessionKey || owner.profile !== profile) {
+    setOwner({ sessionKey, profile, storageKey: threadScrollStorageKey(profile) })
+  }
+
+  return owner.storageKey
 }
 
 interface ThreadMessageListProps {
@@ -601,11 +716,9 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // height change). Shared by "Show earlier" and the budget backfill below.
   const restoreFromBottomRef = useRef<number | null>(null)
   // A reader who moved the viewport themselves owns it: a re-armed restore loop
-  // must not drag them back to the remembered target (the turn-end jerk in
-  // #132776 / #108941). Cleared when they return to the bottom or switch session.
+  // must not drag them back to the remembered target (#132776 / #108941).
   const readerOwnsViewportRef = useRef(false)
-  // A deliberate park recorded by anchorBeforePrepend: that growth is ABOVE the
-  // reader, so consuming it keeps the same content on screen and must still land.
+  // A deliberate park recorded by anchorBeforePrepend: growth ABOVE the reader keeps the same content on screen and must still land.
   const prependParkRef = useRef(false)
   // scrollHeight when the anchor was recorded. The restore effect below also
   // runs on commits that do not grow the content (the transcript arriving
@@ -774,11 +887,12 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   const scrollSessionId = sessionId ?? surfaceId
 
   // Ownership also lives in the session-scoped store: a refresh re-creates the
-  // transcript, the ref goes with it, and the reader is still up there. Measured live
-  // at #132776: a 0 → 14131 px re-pin right after such a remount.
+  // transcript, the ref goes with it — measured at #132776 as a 0 → 14131 px
+  // re-pin right after such a remount, so the store decides as well.
   const readerScrolledUpInStore = useStoreSelector($threadScrolledUpBySession, map =>
     Boolean(scrollSessionId && map[scrollSessionId])
   )
+
   useEffect(() => {
     const atBottom = isAtBottom && !isHistorical
     const publisher = { paneVisible, sessionId: scrollSessionId }
@@ -878,24 +992,9 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   })
 
   // Live scroll state of the CURRENT session, updated on every scroll event
-  // AND on content height changes (ResizeObserver). The RO leg is what keeps
-  // the recorded distance-from-bottom honest: async relayout (images,
-  // highlight, the budget backfill) changes scrollHeight WITHOUT a scroll
-  // event, so a scroll-only cache records a stale offset (the gap #70478's
-  // review threads flagged). Both legs write stateFromMetrics(el).
-  // Bind persistence to this transcript, not whichever Bot most recently
-  // changed the global profile. Visibility changes do not transfer ownership.
-  const [scrollOwner, setScrollOwner] = useState(() => ({
-    sessionKey,
-    profile: scrollProfile,
-    storageKey: threadScrollStorageKey(scrollProfile)
-  }))
-
-  if (scrollOwner.sessionKey !== sessionKey || scrollOwner.profile !== scrollProfile) {
-    setScrollOwner({ sessionKey, profile: scrollProfile, storageKey: threadScrollStorageKey(scrollProfile) })
-  }
-
-  const scrollStorageKey = scrollOwner.storageKey
+  // AND on content height changes — subscribeLiveScrollStateCache owns that
+  // mechanism. The storage key binds persisted positions to this transcript.
+  const scrollStorageKey = useThreadScrollStorageKey(sessionKey, scrollProfile)
   const restoredStorageKeyRef = useRef(scrollStorageKey)
 
   const liveScrollStateRef = useRef<ThreadScrollState>(THREAD_SCROLL_BOTTOM)
@@ -905,7 +1004,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // session's live state and must not file it under the new key).
   const restoredContentKeyRef = useRef<string | null | undefined>(undefined)
 
-  // eslint-disable-next-line no-restricted-syntax -- DOM-event cache (scroll/ResizeObserver callbacks), not an atom mirror
+   
   useEffect(() => {
     const el = scrollRef.current
     const content = contentRef.current
@@ -914,60 +1013,12 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
       return
     }
 
-    // use-stick-to-bottom follows a content resize on the next animation frame,
-    // so a busy streamed turn can grow the content before that callback runs:
-    // the viewport paints at the stale scrollTop, visibly drifting up before
-    // the re-pin (#118482). The RO leg closes that frame, synchronously before
-    // paint.
-    const resizeMetrics = () => readThreadScrollResizeMetrics(el, clearanceRef.current)
-
-    // ponytail: previous-metrics precision is load-bearing — the predicate must
-    // see the frame BEFORE the growth, so a scroll event (which also writes it)
-    // can't leave a stale gap that makes a mid-stream resize look like growth.
-    let previousResizeMetrics = resizeMetrics()
-
-    const update = () => {
-      previousResizeMetrics = resizeMetrics()
-      liveScrollStateRef.current = threadScrollStateFromMetrics(el)
-
-      // Back at the bottom (or a fresh short transcript): the restore may drive again.
-      if (liveScrollStateRef.current.kind === 'bottom') {
-        readerOwnsViewportRef.current = false
-      }
-    }
-
-    const onResize = () => {
-      const nextResizeMetrics = resizeMetrics()
-
-      // Same transcript-only metric as the restore loop: a composer-only resize
-      // (every keystroke) grows the clearance spacer, not the rows, so it is
-      // distinguishable from streamed content. The pre-growth metrics hold the
-      // reader's position, so a reader who scrolled up is never yanked back
-      // (#108941); use-stick-to-bottom stays the single scroll owner otherwise.
-      // An open inline edit holds the viewport (beginEditHold), so its growing
-      // bubble is never followed.
-      if (
-        isRunningRef.current &&
-        !el.hasAttribute('data-editing') &&
-        shouldReapplyFrozenThreadScrollOffset(THREAD_SCROLL_BOTTOM, true, previousResizeMetrics, nextResizeMetrics) &&
-        threadScrollStateFromMetrics({ ...previousResizeMetrics, scrollTop: el.scrollTop }).kind === 'bottom' &&
-        !hasTranscriptTextSelection(el)
-      ) {
-        el.scrollTop = threadScrollTargetTop(THREAD_SCROLL_BOTTOM, nextResizeMetrics)
-      }
-
-      previousResizeMetrics = nextResizeMetrics
-      liveScrollStateRef.current = threadScrollStateFromMetrics(el)
-    }
-
-    el.addEventListener('scroll', update, { passive: true })
-    const observer = new ResizeObserver(onResize)
-    observer.observe(content)
-
-    return () => {
-      el.removeEventListener('scroll', update)
-      observer.disconnect()
-    }
+    return subscribeLiveScrollStateCache(el, content, {
+      clearanceRef,
+      isRunningRef,
+      liveScrollStateRef,
+      readerOwnsViewportRef
+    })
   }, [contentRef, paneVisible, scrollRef])
 
   // Persist the live position on app close, so a reading position survives a
@@ -1053,7 +1104,10 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
     // which must not be filed under this key. And only SETTLED states: mid-
     // settle the ref holds transient clamped metrics (the loop writing targets
     // into a still-arriving transcript), and persisting those would corrupt
-    // the session's real reading position.
+    // the session's real reading position. A landing that never came within
+    // the scroll range is refused before that: cancelRestore declines to cache
+    // its metrics (shouldPersistLanding), so the ref can only hold a position
+    // the transcript actually showed, or the remembered target itself (#131165).
     const record = () => {
       if (sessionKey && loadSettledRef.current && restoredContentKeyRef.current === sessionKey) {
         saveThreadScrollPosition(sessionKey, liveScrollStateRef.current, storageKey)
@@ -1240,8 +1294,31 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
       // Input wins even at a clamped top, where no scroll event fires.
       stopScroll()
       loadSettledRef.current = true
-      liveScrollStateRef.current = threadScrollStateFromMetrics(el)
+
+      // The anchor retires any pending park: input wins, and a delayed taller
+      // tree must not land the target the reader just abandoned.
       restoreFromBottomRef.current = el.scrollHeight - el.scrollTop
+
+      if (
+        shouldPersistLanding({
+          readerOwnsViewport: readerOwnsViewportRef.current,
+          target,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight
+        })
+      ) {
+        liveScrollStateRef.current = threadScrollStateFromMetrics(el)
+      } else {
+        // The landing never came within the scroll range and the reader never
+        // moved: its metrics describe the clamp, not a place anyone chose to
+        // read, so neither the cleanup record() below nor the beforeunload
+        // flush may persist them (#131165 measured {fromBottom: 7416.47}
+        // reopening 7416px above the live tail, re-persisting on every open).
+        // Keep the remembered target as the live state — mid-settle RO/scroll
+        // deliveries may already have cached the clamp's metrics over it.
+        // The reader's next genuine scroll records their real position.
+        liveScrollStateRef.current = target
+      }
     }
 
     cancelRestoreRef.current = target.kind === 'offset' ? cancelRestore : () => resizeObserver.disconnect()
