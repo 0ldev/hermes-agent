@@ -873,16 +873,10 @@ export function confirmReconnectSettlesExcept(workingStoredIds: ReadonlySet<stri
   }
 }
 
-/** Is any surface on THIS window still holding the runtime — the primary view,
- *  an open tile, or a detached chat (the Workflows canvas)? (A tile mid-resume
- *  references by stored id only; its runtime binding is patched in after
- *  `resumeTile` returns.) */
+/** Is any surface on THIS window still holding the runtime — the primary view, an open tile, or a detached chat? (A
+ *  tile mid-resume references by stored id only; its runtime binding is patched in after `resumeTile` returns.) */
 function runtimeReferenced(runtimeId: string, storedSessionId: null | string): boolean {
-  if (runtimeId === $activeSessionId.get()) {
-    return true
-  }
-
-  if (isDetachedSession(runtimeId, storedSessionId)) {
+  if (runtimeId === $activeSessionId.get() || isDetachedSession(runtimeId, storedSessionId)) {
     return true
   }
 
