@@ -295,9 +295,15 @@ interface StoredRowSlot {
 }
 
 /** One logical stored message across compaction generations — the same
- *  role/timestamp/content the backend's display dedupe folds on. */
+ *  role/timestamp/content the backend's display dedupe folds on. Only
+ *  text-only rows qualify: the backend's key also carries tool_call_id,
+ *  tool_calls and tool_name, so a tool-bearing row and a plain row with the
+ *  same visible text and timestamp are distinct durable rows, and matching
+ *  them here deletes a whole turn. */
 function logicalRowKey(message: ChatMessage): string | undefined {
-  return message.rowId === undefined || message.timestamp === undefined
+  return message.rowId === undefined ||
+    message.timestamp === undefined ||
+    message.parts.some(part => part.type !== 'text')
     ? undefined
     : JSON.stringify([message.role, message.timestamp, chatMessageText(message)])
 }
