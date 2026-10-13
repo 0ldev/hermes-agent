@@ -542,6 +542,56 @@ const NO_PARENT = '__none__'
 const PARKED = '__parked__'
 const WORKSPACE_KINDS = ['scratch', 'worktree', 'dir'] as const
 
+/** The new-task footer's estimate affordance: a rough effort figure for what's
+ * typed so far, from the auto-routed auxiliary model. It makes a model call —
+ * explicit action, never run on its own. */
+function EstimateControl({
+  canEstimate,
+  estimate,
+  onEstimate,
+  pending
+}: {
+  canEstimate: boolean
+  estimate: null | TaskEstimate
+  onEstimate: () => void
+  pending: boolean
+}) {
+  const k = useKanban()
+
+  return (
+    <div className="mr-auto flex items-center gap-1 text-[0.75rem] text-(--ui-text-tertiary)">
+      {estimate?.ok ? (
+        <>
+          <Tip label={estimate.rationale || k.roughEstimate}>
+            <span className="font-medium tabular-nums text-(--ui-text-secondary)">
+              ~{compactNumber(estimate.est_tokens)} {k.tokUnit}
+              {estimate.complexity ? ` · ${k.complexity[estimate.complexity] ?? estimate.complexity}` : ''}
+            </span>
+          </Tip>
+          <Tip label={k.reEstimate}>
+            <Button
+              aria-label={k.reEstimate}
+              disabled={!canEstimate || pending}
+              onClick={onEstimate}
+              size="icon-xs"
+              variant="ghost"
+            >
+              <Codicon name="refresh" size="0.7rem" spinning={pending} />
+            </Button>
+          </Tip>
+        </>
+      ) : (
+        <Tip label={k.estimateTip}>
+          <Button disabled={!canEstimate || pending} onClick={onEstimate} size="xs" variant="ghost">
+            <Codicon name={pending ? 'loading' : 'dashboard'} size="0.75rem" spinning={pending} />
+            {pending ? k.estimating : k.estimate}
+          </Button>
+        </Tip>
+      )}
+    </div>
+  )
+}
+
 function NewTaskDialog({
   onClose,
   parents,
@@ -806,45 +856,12 @@ function NewTaskDialog({
           {error && <span className="text-[0.75rem] text-destructive">{error}</span>}
         </div>
         <DialogFooter>
-          <div className="mr-auto flex items-center gap-1 text-[0.75rem] text-(--ui-text-tertiary)">
-            {estimate?.ok ? (
-              <>
-                <Tip label={estimate.rationale || k.roughEstimate}>
-                  <span className="font-medium tabular-nums text-(--ui-text-secondary)">
-                    ~{compactNumber(estimate.est_tokens)} {k.tokUnit}
-                    {estimate.complexity ? ` · ${k.complexity[estimate.complexity] ?? estimate.complexity}` : ''}
-                  </span>
-                </Tip>
-                <Tip label={k.reEstimate}>
-                  <Button
-                    aria-label={k.reEstimate}
-                    disabled={!title.trim() || estMut.isPending}
-                    onClick={() => estMut.mutate()}
-                    size="icon-xs"
-                    variant="ghost"
-                  >
-                    <Codicon name="refresh" size="0.7rem" spinning={estMut.isPending} />
-                  </Button>
-                </Tip>
-              </>
-            ) : (
-              <Tip label={k.estimateTip}>
-                <Button
-                  disabled={!title.trim() || estMut.isPending}
-                  onClick={() => estMut.mutate()}
-                  size="xs"
-                  variant="ghost"
-                >
-                  <Codicon
-                    name={estMut.isPending ? 'loading' : 'dashboard'}
-                    size="0.75rem"
-                    spinning={estMut.isPending}
-                  />
-                  {estMut.isPending ? k.estimating : k.estimate}
-                </Button>
-              </Tip>
-            )}
-          </div>
+          <EstimateControl
+            canEstimate={Boolean(title.trim())}
+            estimate={estimate}
+            onEstimate={() => estMut.mutate()}
+            pending={estMut.isPending}
+          />
           <Button onClick={onClose} variant="text">
             {k.cancel}
           </Button>
