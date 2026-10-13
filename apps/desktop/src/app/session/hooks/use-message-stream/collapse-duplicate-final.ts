@@ -1,3 +1,5 @@
+import type { PersistedTurn } from '@hermes/shared'
+
 import { transcriptRowIds } from '@/app/session/hooks/use-session-actions/pending-turn-identity'
 import { type ChatMessage, chatMessageText, withUniqueToolCallIdsWithinMessage } from '@/lib/chat-messages'
 
@@ -5,6 +7,16 @@ export interface DuplicateFinalCollapse {
   /** The surviving bubble replaces the removed stream id at completion. */
   keptId: string
   messages: ChatMessage[]
+}
+
+/** The stored row the terminal frame's receipt names, or null when absent or
+ *  malformed (#123801). */
+export function finalRowIdFromReceipt(
+  persistedTurn: Pick<PersistedTurn, 'final_assistant_row_id'> | null | undefined
+): null | number {
+  const rowId = persistedTurn?.final_assistant_row_id
+
+  return typeof rowId === 'number' && Number.isSafeInteger(rowId) && rowId > 0 ? rowId : null
 }
 
 /** An identical final belongs to the adjacent interim, not a second tool bubble. */

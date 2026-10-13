@@ -44,6 +44,7 @@ import {
   collapseDuplicateFinalOntoIdenticalInterim,
   collapseLiveTwinOfPersistedFinal,
   type DuplicateFinalCollapse,
+  finalRowIdFromReceipt,
   identicalInterimSiblingIndex
 } from './collapse-duplicate-final'
 import { useGatewayEventHandler } from './gateway-event'
@@ -791,12 +792,7 @@ export function useMessageStream({
             : mergeCurrentResponseText(parts, visibleFinalText, occurredAt)
         }
 
-        const receiptFinalRowId = persistedTurn?.final_assistant_row_id
-
-        const finalRowId =
-          typeof receiptFinalRowId === 'number' && Number.isSafeInteger(receiptFinalRowId) && receiptFinalRowId > 0
-            ? receiptFinalRowId
-            : null
+        const finalRowId = finalRowIdFromReceipt(persistedTurn)
 
         const withPersistedIdentity = (message: ChatMessage): ChatMessage => {
           const finalPartIndex = message.parts.findLastIndex(part => part.type === 'text')

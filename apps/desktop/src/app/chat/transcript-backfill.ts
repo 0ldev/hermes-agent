@@ -349,6 +349,11 @@ function mergeOverlappingTail(previous: ChatMessage[], refreshedTail: ChatMessag
     return key !== undefined && !refreshedRowIds.has(rowId) && refreshedLogicalRows.has(key)
   }
 
+  /** True when the page supersedes this window row: the same slot already holds
+   *  it, or the page carries the same logical row under a fresh stored id. */
+  const supersededByPage = (message: ChatMessage, rowId: number, existing: StoredRowSlot | undefined): boolean =>
+    existing !== undefined || reinsertedByPage(message, rowId)
+
   const place = (messages: ChatMessage[], fresh: boolean): ChatMessage[] => {
     let pending: ChatMessage[] = []
 
@@ -383,7 +388,7 @@ function mergeOverlappingTail(previous: ChatMessage[], refreshedTail: ChatMessag
 
       const existing = byRowId.get(rowId)
 
-      if (!fresh && (existing || reinsertedByPage(message, message.rowId))) {
+      if (!fresh && supersededByPage(message, rowId, existing)) {
         pending = []
 
         continue

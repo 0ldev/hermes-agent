@@ -1107,9 +1107,7 @@ _ASSISTANT_REPLAY_FIELDS: tuple[str, ...] = (
     "finish_reason")
 
 
-def _build_replay_entry(
-    role: str, content: Any, msg: dict[str, Any]
-) -> dict[str, Any]:
+def _build_replay_entry(role: str, content: Any, msg: dict[str, Any]) -> dict[str, Any]:
     """Build a replay entry for a non-tool-calling message, preserving ``_ASSISTANT_REPLAY_FIELDS``.
 
     The durable ``timestamp`` is kept (the wire sanitizers strip it): it is part of the row's display identity,
