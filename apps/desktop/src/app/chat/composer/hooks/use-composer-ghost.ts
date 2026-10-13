@@ -39,17 +39,31 @@ export function ghostVisible(o: { busy: boolean; dismissed: boolean; empty: bool
   return o.empty && !o.busy && !o.dismissed && o.ghost !== ''
 }
 
+/** Plain Tab only: a modified Tab keeps its native meaning. */
+const isPlainTab = (e: KeyboardEvent) => e.key === 'Tab' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey
+
 export function useComposerGhost(opts: {
   busy: boolean
-  empty: boolean
-  gateway: HermesGateway | null
+  gateway: HermesGateway | null | undefined
+  hasText: boolean
+  placeholder: string
+  /** Accepted ghost text goes into the composer (never sent), then focus returns to it. */
+  requestMainFocus: () => void
   sessionId: null | string | undefined
+  setComposerText: (text: string) => void
+  /** An open `/` or `@` drawer owns Tab/Escape. */
+  trigger: unknown
 }): {
   acceptGhost: () => null | string
   dismissGhost: () => boolean
   ghost: string
+  /** Tab accepts / Esc dismisses a visible ghost; true when the key was consumed. */
+  handleGhostKeyDown: (event: { key: string; nativeEvent: KeyboardEvent; preventDefault: () => void }) => boolean
+  /** The ghost while visible, else the regular placeholder. */
+  placeholder: string
 } {
-  const { busy, empty, gateway, sessionId } = opts
+  const { busy, gateway, hasText, placeholder, requestMainFocus, sessionId, setComposerText, trigger } = opts
+  const empty = !hasText
   const [ghost, setGhost] = useState('')
   const [dismissed, setDismissed] = useState(false)
   const prevBusyRef = useRef(busy)
@@ -124,5 +138,39 @@ export function useComposerGhost(opts: {
     return true
   }, [visible])
 
-  return { acceptGhost, dismissGhost, ghost: visible ? ghost : '' }
+  const handleGhostKeyDown = useCallback(
+    (event: { key: string; nativeEvent: KeyboardEvent; preventDefault: () => void }): boolean => {
+      if (trigger || !visible) {
+        return false
+      }
+
+      if (isPlainTab(event.nativeEvent)) {
+        // preventDefault keeps Tab from moving focus to the model picker.
+        event.preventDefault()
+        setGhost('')
+        setComposerText(ghost)
+        requestMainFocus()
+
+        return true
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setDismissed(true)
+
+        return true
+      }
+
+      return false
+    },
+    [ghost, requestMainFocus, setComposerText, trigger, visible]
+  )
+
+  return {
+    acceptGhost,
+    dismissGhost,
+    ghost: visible ? ghost : '',
+    handleGhostKeyDown,
+    placeholder: visible ? ghost : placeholder
+  }
 }
