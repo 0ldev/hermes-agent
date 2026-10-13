@@ -50,6 +50,61 @@ export interface AddStepInput {
   dir?: FlowDir
 }
 
+/** What `chainWires` worked out. */
+interface ChainWires {
+  edges: Edge[]
+  /** Message fragment naming the ends it wired, e.g. ` after a and before b`. */
+  wiring: string
+  /** The step it wired to, to place the new card beside. */
+  anchor?: Node
+  /** One rank along the flow (`1`) or back against it (`-1`). */
+  lead: number
+}
+
+/** Wire a step in by its ends rather than by a wire: `after` feeds it, `before`
+ *  is fed by it. Says where it landed for placement — beside the `after` step,
+ *  or upstream of the `before` one — and refuses a name that isn't a step. */
+function chainWires(g: Graph, id: string, input: AddStepInput): ChainWires | OpResult {
+  const links: Edge[] = []
+  let anchor: Node | undefined
+  let lead = 1
+
+  if (input.after) {
+    const from = resolveStep(g, input.after)
+
+    if (!from) {
+      return fail(g, `There's no step called "${input.after}".`)
+    }
+
+    links.push(newEdge(from.id, id))
+    anchor = from
+  }
+
+  if (input.before) {
+    const to = resolveStep(g, input.before)
+
+    if (!to) {
+      return fail(g, `There's no step called "${input.before}".`)
+    }
+
+    links.push(newEdge(id, to.id))
+
+    if (!anchor) {
+      anchor = to
+      lead = -1
+    }
+  }
+
+  return {
+    anchor,
+    edges: [...g.edges, ...links],
+    lead,
+    wiring: links.length
+      ? ` ${input.after ? `after ${input.after}` : ''}${input.after && input.before ? ' and' : ''}${input.before ? ` before ${input.before}` : ''}`
+      : ''
+  }
+}
+
 export function addStep(g: Graph, input: AddStepInput): OpResult {
   const spec = STEP_KINDS.find(k => k.kind === input.kind)
 
@@ -92,41 +147,16 @@ export function addStep(g: Graph, input: AddStepInput): OpResult {
     wiring = ` between ${split.source} and ${split.target}`
     anchor = stepById(g, split.source)
   } else {
-    const links: Edge[] = []
+    const chained = chainWires(g, id, input)
 
-    if (input.after) {
-      const from = resolveStep(g, input.after)
-
-      if (!from) {
-        return fail(g, `There's no step called "${input.after}".`)
-      }
-
-      links.push(newEdge(from.id, id))
-      anchor = from
+    if ('ok' in chained) {
+      return chained
     }
 
-    if (input.before) {
-      const to = resolveStep(g, input.before)
-
-      if (!to) {
-        return fail(g, `There's no step called "${input.before}".`)
-      }
-
-      links.push(newEdge(id, to.id))
-
-      if (!anchor) {
-        anchor = to
-        lead = -1
-      }
-    }
-
-    edges = [...g.edges, ...links]
-
-    if (links.length) {
-      wiring = ` ${input.after ? `after ${input.after}` : ''}${
-        input.after && input.before ? ' and' : ''
-      }${input.before ? ` before ${input.before}` : ''}`
-    }
+    edges = chained.edges
+    wiring = chained.wiring
+    anchor = chained.anchor
+    lead = chained.lead
   }
 
   // A tool never sends a position, so the rank step has to follow the flow.
