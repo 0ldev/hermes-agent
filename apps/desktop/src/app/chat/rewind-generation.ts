@@ -35,3 +35,16 @@ export function pageOutranksRenderedTranscript(
     pageGeneration > renderedGeneration
   )
 }
+
+/**
+ * The rewind generation a painted transcript was read at (#119819): stamped on
+ * the session-state publish so the next stale-page guard can tell a stale read
+ * from an intentional rewind. Empty when the page carried no generation or the
+ * page never painted.
+ */
+export function rewindGenerationStamp(
+  generation: number | undefined,
+  painted: boolean
+): { rewindGeneration: number } | Record<string, never> {
+  return typeof generation === 'number' && painted ? { rewindGeneration: generation } : {}
+}

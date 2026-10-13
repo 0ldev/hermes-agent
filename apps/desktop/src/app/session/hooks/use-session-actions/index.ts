@@ -2,7 +2,7 @@ import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 import type { NavigateFunction } from 'react-router'
 
-import { pageOutranksRenderedTranscript } from '@/app/chat/rewind-generation'
+import { rewindGenerationStamp } from '@/app/chat/rewind-generation'
 import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
 import {
   extendRefreshPageToOverlap,
@@ -23,7 +23,6 @@ import { useI18n } from '@/i18n'
 import {
   type ChatMessage,
   preserveLocalAssistantErrors,
-  QUESTION_CARD_TOOLS,
   restorePendingClarifyToolCall,
   settlePendingClarifyToolCall,
   stripPendingClarifyProjectionForCache,
@@ -124,7 +123,6 @@ import {
   type SessionProfileRoute
 } from '@/store/session-request-router'
 import {
-  $sessionStates,
   $sessionTiles,
   closeSessionTile,
   dropSessionState,
@@ -171,8 +169,14 @@ import { reconcilePersistedLiveTurn } from './persisted-live-turn'
 import { provisionalTranscriptPaint, transcriptRestScope } from './provisional-transcript'
 import { rememberedOwnerForResume } from './remembered-owner'
 import { restorePendingApproval } from './restore-pending-approval'
-import { pendingClarifyToolPayload, restorePendingClarifyFromSnapshot } from './restore-pending-clarify'
+import {
+  pendingClarifyToolPayload,
+  restorePendingClarifyFromSnapshot,
+  withoutEarlyClarifyProjection
+} from './restore-pending-clarify'
 import { projectPendingConnection, restorePendingConnectionFromSnapshot } from './restore-pending-connection'
+import { takeWarmSessionCache } from './resume-warm-cache'
+import { prefetchRewindGate, resumeRewindGate } from './rewind-gate'
 import { createGatewaySession, desktopSessionCreateParams } from './session-create-request'
 import {
   createPersistedDisplayTranscriptProvenance,
@@ -299,39 +303,6 @@ interface FreshSessionDraftOptions {
   replaceRoute?: boolean
   rotateFreshDraftKey?: boolean
   workspaceTarget?: NewChatWorkspaceTarget
-}
-
-/** Drop the pre-hydration request-id row without copying the other messages.
- *  A copied clarify row looks like a concurrent edit and hydration keeps both. */
-function withoutEarlyClarifyProjection(messages: ChatMessage[], requestId: string): ChatMessage[] {
-  let changed = false
-  const next: ChatMessage[] = []
-
-  for (const message of messages) {
-    const parts = message.parts.filter(
-      part =>
-        !(
-          part.type === 'tool-call' &&
-          QUESTION_CARD_TOOLS.has(part.toolName) &&
-          part.result === undefined &&
-          part.toolCallId === requestId
-        )
-    )
-
-    if (parts.length === message.parts.length) {
-      next.push(message)
-
-      continue
-    }
-
-    changed = true
-
-    if (parts.length > 0) {
-      next.push({ ...message, parts })
-    }
-  }
-
-  return changed ? next : messages
 }
 
 /** Session-state patch for a restored blocking prompt row; the first non-null projection is used. */
@@ -1286,33 +1257,15 @@ export function useSessionActions({
       // chat view drops the error state and shows the loader again.
       setResumeExhaustedSessionId(current => (current === storedSessionId ? null : current))
 
-      // A warm cache entry is only trustworthy when it still BELONGS to the
-      // session being resumed. A pooled profile backend that gets idle-reaped
-      // and respawned (pruneSecondaryGateways) re-mints runtime ids, so a
-      // recycled id can resolve to a live-but-DIFFERENT session's cache entry.
-      // The session.activate 404 guard below only catches a fully-DEAD id — a
-      // recycled-live id 200s, so an unchecked hit paints the wrong transcript
-      // under the current route (the "open chat A, chat B loads" bug). On a
-      // mismatch the mapping is cross-wired: purge both sides and report a miss
-      // so the caller falls through to a full resume that rebinds a correct id.
-      const takeWarmCache = (): { runtimeId: string; state: ClientSessionState } | null => {
-        const runtimeId = runtimeIdByStoredSessionIdRef.current.get(storedSessionId)
-        const state = runtimeId ? sessionStateByRuntimeIdRef.current.get(runtimeId) : undefined
-
-        if (!runtimeId || !state) {
-          return null
-        }
-
-        if (state.storedSessionId !== storedSessionId) {
-          runtimeIdByStoredSessionIdRef.current.delete(storedSessionId)
-          sessionStateByRuntimeIdRef.current.delete(runtimeId)
-          dropSessionState(runtimeId)
-
-          return null
-        }
-
-        return { runtimeId, state }
-      }
+      // A warm cache entry is only trustworthy while it still BELONGS to this
+      // session (recycled runtime ids cross-wire the mapping; see
+      // takeWarmSessionCache in resume-warm-cache.ts, which purges on mismatch).
+      const takeWarmCache = (): { runtimeId: string; state: ClientSessionState } | null =>
+        takeWarmSessionCache(
+          runtimeIdByStoredSessionIdRef.current,
+          sessionStateByRuntimeIdRef.current,
+          storedSessionId
+        )
 
       // The selection moved above, but a warm runtime is only (re)bound after
       // the awaits below. Until then the foreground may stay on a runtime only
@@ -1783,7 +1736,6 @@ export function useSessionActions({
               // instead of replacing durable history while the turn is running.
               let acceptedPersistedDisplayTranscript = false
               let reconciledCurrentLiveTurn = false
-              // Rewind generation of the accepted persisted page (#119819).
               let persistedRewindGeneration: number | undefined
 
               if (persistedTranscriptPromise) {
@@ -1842,15 +1794,9 @@ export function useSessionActions({
                     return
                   }
 
-                  // Rewind-generation gate (#119819): a page read AFTER an
-                  // undo legitimately holds fewer rows — it is the authority.
-                  const pageNewerThanRendered = pageOutranksRenderedTranscript(persisted, cachedViewState)
-                  persistedRewindGeneration = persisted?.rewind_generation
-
-                  const persistedMessages = graftRefreshedTailOntoBackfill(persistedTail, cachedViewState.messages, {
-                    pageNewerThanRendered
-                  })
-
+                  const { pageNewerThanRendered, rewindGeneration: pageRewindGeneration } = resumeRewindGate(persisted, cachedViewState)
+                  persistedRewindGeneration = pageRewindGeneration
+                  const persistedMessages = graftRefreshedTailOntoBackfill(persistedTail, cachedViewState.messages, { pageNewerThanRendered })
                   const runtimeMessages = toChatMessages(activated.messages)
                   const previousMessages = removeRepresentedLocalLiveProjection(cachedViewState.messages, activated)
 
@@ -1953,11 +1899,7 @@ export function useSessionActions({
                     acceptedPersistedDisplayTranscript || hasValidProvenance
                       ? (expectedProvenance ?? undefined)
                       : undefined,
-                  // Stamp the rewind generation the painted transcript was read
-                  // at (#119819) — see the cold-resume publish below.
-                  ...(typeof persistedRewindGeneration === 'number' && acceptedPersistedDisplayTranscript
-                    ? { rewindGeneration: persistedRewindGeneration }
-                    : {}),
+                  ...rewindGenerationStamp(persistedRewindGeneration, acceptedPersistedDisplayTranscript),
                   ...livePromptStreamId(pendingConnectionProjection, pendingClarifyProjection),
                   ...(clearedClarifyProjection
                     ? {
@@ -2188,15 +2130,11 @@ export function useSessionActions({
             olderPageReader(storedSessionId, sessionRestScope, prefetchedResult)
           )
 
-          // Rewind-generation gate (#119819): see the activate path above.
-          const pageNewerThanRendered = pageOutranksRenderedTranscript(
+          const { pageNewerThanRendered } = prefetchRewindGate(
             prefetchedResult,
-            $sessionStates.get()[activeSessionIdRef.current ?? '']
+            activeSessionIdRef.current
           )
-
-          const graftedPrefetch = graftRefreshedTailOntoBackfill(prefetchedTail, previousMessages, {
-            pageNewerThanRendered
-          })
+          const graftedPrefetch = graftRefreshedTailOntoBackfill(prefetchedTail, previousMessages, { pageNewerThanRendered })
 
           prefetchedTranscriptMessages = graftedPrefetch
           localSnapshot = reconcileAuthoritativeChatMessages(graftedPrefetch, previousMessages)
@@ -2439,12 +2377,7 @@ export function useSessionActions({
             runtimeStartedAt,
             messages: visibleMessagesForView,
             transcriptProvenance,
-            // Stamp the rewind generation the painted transcript was read at
-            // so the next stale-page guard can tell a stale read from an
-            // intentional rewind (#119819).
-            ...(typeof prefetchedResult?.rewind_generation === 'number' && prefetchApplied
-              ? { rewindGeneration: prefetchedResult.rewind_generation }
-              : {}),
+            ...rewindGenerationStamp(prefetchedResult?.rewind_generation, prefetchApplied),
             busy: resumedRunning,
             awaitingResponse: resumedRunning && !recoveredInFlightTail,
             // Backend reported this turn running at resume time — live proof.
