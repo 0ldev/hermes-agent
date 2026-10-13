@@ -8,11 +8,9 @@ import {
   Contribute,
   EmptyState,
   PageHeader,
-  PageHeaderActions,
   PageHeaderTitle,
   PageShell,
   SidePanel,
-  Tip,
   TITLEBAR_AREAS,
   useTheme,
   useValue
@@ -39,6 +37,7 @@ import { $currentId, $workflows, createWorkflow, saveWorkflow, type WorkflowDoc 
 import { CutEdgeProvider, edgeTypes } from './edges'
 import { fromScenario, type Graph, runPlan, toScenario, updateStep } from './graph'
 import type { RunControl } from './graph-dispatch'
+import { FlowHeader } from './header'
 import { Inspector } from './inspector'
 import { FIT, tidyLayout } from './layout'
 import { LiveLog } from './livelog'
@@ -402,37 +401,7 @@ function Flow({ doc }: { doc: WorkflowDoc }) {
   return (
     <RunNowProvider value={{ start: player.start, fireWebhook: player.fireWebhook, running: player.running }}>
       <PageShell className="wf-root" style={{ '--wf-inspector': selNode ? INSPECTOR_REM : '0rem' } as CSSProperties}>
-        {/* Same header as the Kanban board: the page name here, the current
-          workflow in the titlebar (see WorkflowSwitcher). Theme and mode are
-          the host's — they live in Settings, not on this page. */}
-        <PageHeader>
-          <PageHeaderTitle>Workflows</PageHeaderTitle>
-          <PageHeaderActions>
-            {/* A divided box, not an arrow: the icon has to say "arrangement",
-              and a lone chevron on a header button says "this opens something".
-              It shows the layout you'd GET.
-              
-              The LABEL, though, names the control and doesn't change with it.
-              You click this with the tip already open, so a label that swapped
-              between two different-length strings resized and re-centred its
-              bubble on every press — a flicker right under the header, for a
-              state the icon is already showing. */}
-            <Tip label="Flip layout direction">
-              <Button
-                aria-label="Flip layout direction"
-                onClick={() => setDir(vertical ? 'LR' : 'TB')}
-                size="icon-xs"
-                variant="ghost"
-              >
-                <Codicon
-                  className="grid size-3.5 place-items-center"
-                  name={vertical ? 'split-vertical' : 'split-horizontal'}
-                  size="0.85rem"
-                />
-              </Button>
-            </Tip>
-          </PageHeaderActions>
-        </PageHeader>
+        <FlowHeader setDir={setDir} vertical={vertical} />
 
         <div
           className={cn('canvas-wrap', reflowing && 'reflowing')}
