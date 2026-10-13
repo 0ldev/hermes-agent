@@ -8,8 +8,10 @@ type RewindPage = Pick<SessionMessagesResponse, 'rewind_generation'> | null | un
 type RenderedTranscript = Pick<ClientSessionState, 'rewindGeneration'> | undefined
 
 interface RewindGate {
-  /** True when an intentional rewind landed between the two reads: the page
-   *  is the authority and the graft must not "correct" it back. */
+  /** True when the page is the authority and the graft must not "correct" it
+   *  back: an intentional rewind landed between the two reads, or generation
+   *  evidence is unavailable (older backend) and the pre-guard
+   *  refresh-authoritative behavior applies. */
   pageNewerThanRendered: boolean
   /** The page's own generation, for the state publish's stamp. */
   rewindGeneration: number | undefined

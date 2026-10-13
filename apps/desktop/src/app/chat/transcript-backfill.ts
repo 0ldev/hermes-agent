@@ -564,8 +564,10 @@ export async function extendRefreshPageToOverlap(
  * "newer than" the refreshed page because the user removed it. The caller
  * therefore only treats a below-water page as stale when the transcript it
  * would clobber was read at the SAME rewind generation as the page (no undo
- * happened in between); after a rewind the page is the authority and the
- * removed rows must stay gone.
+ * happened in between); after a rewind — or with no generation evidence on
+ * either side (an older backend, where the refresh was authoritative before
+ * this guard) — the page is the authority and the removed rows must stay
+ * gone.
  */
 export function retainNewerRowsOverStalePage(
   merged: ChatMessage[],

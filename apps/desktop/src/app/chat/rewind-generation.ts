@@ -14,13 +14,20 @@ import type { SessionMessagesResponse } from '@/types/hermes'
  *   or truncation happened in between; the missing rows are gone on purpose
  *   and the page is the authority. Retaining them would resurrect undone work
  *   on every background refresh (the /undo regression class).
+ * - NEITHER side carries a generation (an older backend, or a transcript
+ *   painted before any page carried one) — a below-water page is then
+ *   indistinguishable from an intentional rewind, so the refresh stays
+ *   authoritative exactly as it was before this guard: retention is a
+ *   same-generation judgement and requires positive evidence on both sides.
+ *     The accepted trade-off: on backends that predate `rewind_generation`
+ *     the original #119819 symptom (a stale page clobbering newer rendered
+ *     rows) stays possible — without a generation there is no way to tell a
+ *     stale read from a rewind, and the pre-guard behavior is the safer
+ *     default because it never resurrects undone rows.
  *
  * True = the page outranks the rendered transcript (an intentional rewind
- * landed between the two reads) — the caller must NOT retain the rendered
- * rows the page omits. A page with no generation (older backend) or a
- * rendered transcript with none yet (first paint) never outranks: the guard
- * only ever disables retention, never enables dropping rows the graft would
- * otherwise keep.
+ * landed between the two reads, or no generation evidence exists) — the
+ * caller must NOT retain the rendered rows the page omits.
  */
 export function pageOutranksRenderedTranscript(
   page: Pick<SessionMessagesResponse, 'rewind_generation'> | null | undefined,
@@ -29,11 +36,11 @@ export function pageOutranksRenderedTranscript(
   const pageGeneration = page?.rewind_generation
   const renderedGeneration = rendered?.rewindGeneration
 
-  return (
-    typeof pageGeneration === 'number' &&
-    typeof renderedGeneration === 'number' &&
-    pageGeneration > renderedGeneration
-  )
+  if (typeof pageGeneration !== 'number' || typeof renderedGeneration !== 'number') {
+    return true
+  }
+
+  return pageGeneration > renderedGeneration
 }
 
 /**
