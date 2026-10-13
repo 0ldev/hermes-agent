@@ -25,113 +25,81 @@ const FEED_HIDDEN: ReadonlySet<EventType> = new Set<EventType>([
   'NodeFinished'
 ])
 
+/** The ProtoEvent member for one wire type. */
+type EventOf<T extends EventType> = Extract<ProtoEvent, { type: T }>
+
+/** The envelope every line shares: when it happened, and whether the canvas
+ *  synthesized the event (the timeline shows engine-sourced marks natively). */
+const envelope = (e: ProtoEvent): Pick<FeedLine, 'ext' | 'ts'> => ({ ext: HERMES_EXT.has(e.type), ts: e.ts })
+
+/** One line per readable wire type — a row, not a case. */
+const LINE_BY_TYPE: { [T in EventType]?: (e: EventOf<T>) => FeedLine } = {
+  RunStarted: e => ({ ...envelope(e), step: 'run', kind: 'start', msg: e.payload.scenario }),
+  RunFinished: e => ({ ...envelope(e), step: 'run', kind: 'ok', msg: `run ${e.payload.state}` }),
+  RunPaused: e => ({ ...envelope(e), step: 'run', kind: 'data', msg: 'paused' }),
+  NodeStarted: e => ({
+    ...envelope(e),
+    step: e.payload.nodeId,
+    kind: 'start',
+    msg: `delegate_task spawned · ${e.payload.input}`
+  }),
+  AgentTraceEvent: e => ({
+    ...envelope(e),
+    step: e.payload.nodeId,
+    kind: 'tool',
+    msg: `${e.payload.tool.name}${e.payload.tool.arg ? ` · ${e.payload.tool.arg}` : ''}`
+  }),
+  AgentTraceSummary: e => ({
+    ...envelope(e),
+    step: e.payload.nodeId,
+    kind: e.payload.verdict === 'FAIL' ? 'fail' : 'ok',
+    msg: e.payload.summary
+  }),
+  NodeFailed: e => ({ ...envelope(e), step: e.payload.nodeId, kind: 'fail', msg: e.payload.error }),
+  NodeSkipped: e => ({ ...envelope(e), step: e.payload.nodeId, kind: 'data', msg: `skipped · ${e.payload.reason}` }),
+  GateEvaluated: e => ({
+    ...envelope(e),
+    step: e.payload.nodeId,
+    kind: e.payload.decision === 'pass' ? 'ok' : 'loop',
+    msg: e.payload.summary
+  }),
+  LoopAdvanced: e => ({
+    ...envelope(e),
+    step: e.payload.loopId,
+    kind: 'loop',
+    msg: `take ${e.payload.iteration + 1} → ${e.payload.to} · ${e.payload.feedback}`
+  }),
+  HumanWaiting: e => ({
+    ...envelope(e),
+    step: e.payload.nodeId,
+    kind: 'data',
+    msg: `waiting on you · ${e.payload.prompt}`
+  }),
+  HumanResponded: e => ({
+    ...envelope(e),
+    step: e.payload.nodeId,
+    kind: e.payload.decision === 'approved' ? 'ok' : 'fail',
+    msg: `${e.payload.decision} · ${e.payload.by}`
+  }),
+  WaitStarted: e => ({
+    ...envelope(e),
+    step: e.payload.nodeId,
+    kind: 'data',
+    msg: `waiting on ${e.payload.label}`
+  }),
+  WaitResolved: e => ({ ...envelope(e), step: e.payload.nodeId, kind: 'ok', msg: e.payload.by }),
+  UserAsk: e => ({ ...envelope(e), step: e.payload.nodeId, kind: 'data', msg: e.payload.prompt })
+}
+
+/** The line for one wire type, if the feed shows it — the type-safe seam of the keyed dispatch. */
+function lineFor<T extends EventType>(e: EventOf<T>): FeedLine | undefined {
+  return LINE_BY_TYPE[e.type]?.(e)
+}
+
 export function feedLine(e: ProtoEvent): FeedLine | null {
   if (FEED_HIDDEN.has(e.type)) {
     return null
   }
 
-  const ext = HERMES_EXT.has(e.type)
-  const base = { ext, ts: e.ts }
-
-  switch (e.type) {
-    case 'RunStarted':
-      return { ...base, step: 'run', kind: 'start', msg: e.payload.scenario }
-
-    case 'RunFinished':
-      return { ...base, step: 'run', kind: 'ok', msg: `run ${e.payload.state}` }
-
-    case 'RunPaused':
-      return { ...base, step: 'run', kind: 'data', msg: 'paused' }
-
-    case 'NodeStarted':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: 'start',
-        msg: `delegate_task spawned · ${e.payload.input}`
-      }
-    case 'AgentTraceEvent': {
-      const t = e.payload.tool
-
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: 'tool',
-        msg: `${t.name}${t.arg ? ` · ${t.arg}` : ''}`
-      }
-    }
-
-    case 'AgentTraceSummary':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: e.payload.verdict === 'FAIL' ? 'fail' : 'ok',
-        msg: e.payload.summary
-      }
-
-    case 'NodeFailed':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: 'fail',
-        msg: e.payload.error
-      }
-
-    case 'NodeSkipped':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: 'data',
-        msg: `skipped · ${e.payload.reason}`
-      }
-
-    case 'GateEvaluated':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: e.payload.decision === 'pass' ? 'ok' : 'loop',
-        msg: e.payload.summary
-      }
-
-    case 'LoopAdvanced':
-      return {
-        ...base,
-        step: e.payload.loopId,
-        kind: 'loop',
-        msg: `take ${e.payload.iteration + 1} → ${e.payload.to} · ${e.payload.feedback}`
-      }
-
-    case 'HumanWaiting':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: 'data',
-        msg: `waiting on you · ${e.payload.prompt}`
-      }
-
-    case 'HumanResponded':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: e.payload.decision === 'approved' ? 'ok' : 'fail',
-        msg: `${e.payload.decision} · ${e.payload.by}`
-      }
-
-    case 'WaitStarted':
-      return {
-        ...base,
-        step: e.payload.nodeId,
-        kind: 'data',
-        msg: `waiting on ${e.payload.label}`
-      }
-
-    case 'WaitResolved':
-      return { ...base, step: e.payload.nodeId, kind: 'ok', msg: e.payload.by }
-
-    case 'UserAsk':
-      return { ...base, step: e.payload.nodeId, kind: 'data', msg: e.payload.prompt }
-
-    default:
-      return null
-  }
+  return lineFor(e) ?? null
 }

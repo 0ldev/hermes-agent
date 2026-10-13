@@ -116,13 +116,13 @@ function spanAttributes(start: RelayEvent, end: RelayEvent | undefined): Record<
   return attributes
 }
 
-/**
- * Fold one session's Relay event log into the waterfall's span tree. A span is a
- * scope start/end pair (same uuid); an open scope is running and extends to `nowSec`.
- * A delegated session's scope hangs off the turn in Relay; it is drawn under the
- * `delegate_task` call that was open when it started, which is the call that spawned it.
- */
-export function foldRelayEvents(events: RelayEvent[], labels: TraceLabels, nowSec: number): TraceDoc {
+/** Bucket a session's Relay log by what the fold reads: scope starts/ends, turn inputs, stream marks. */
+function indexEvents(events: RelayEvent[]): {
+  starts: Map<string, RelayEvent>
+  ends: Map<string, RelayEvent>
+  turnInputs: Map<string, string>
+  streamMarks: RelayEvent[]
+} {
   const starts = new Map<string, RelayEvent>()
   const ends = new Map<string, RelayEvent>()
   const turnInputs = new Map<string, string>()
@@ -142,62 +142,92 @@ export function foldRelayEvents(events: RelayEvent[], labels: TraceLabels, nowSe
     }
   }
 
+  return { starts, ends, turnInputs, streamMarks }
+}
+
+/** The waterfall label for a scope: the canned names for Hermes's own scopes, the model for a
+ *  model call, the raw name otherwise. A session scope with a parent session is a subagent. */
+function spanName(start: RelayEvent, uuid: string, turnInputs: Map<string, string>, labels: TraceLabels): string {
+  if (start.name === SESSION_SCOPE) {
+    return obj(start.metadata)['hermes.parent_session_id'] ? labels.subagent : labels.session
+  }
+
+  if (start.name === TURN_SCOPE) {
+    return turnInputs.get(uuid) || labels.turn
+  }
+
+  if (start.name === LOGICAL_LLM_SCOPE) {
+    return labels.llmCall
+  }
+
+  if (start.category === 'llm') {
+    return str(obj(start.category_profile).model_name) || start.name
+  }
+
+  return start.name
+}
+
+/** Which session a scope belongs to: its own id if it IS the session scope, else its parent's.
+ *  `sessionOf` memoizes across the fold. */
+function owningSessionOf(
+  starts: Map<string, RelayEvent>,
+  sessionOf: Map<string, null | string>,
+  uuid: null | string | undefined
+): null | string {
+  if (!uuid || !starts.has(uuid)) {
+    return null
+  }
+
+  const cached = sessionOf.get(uuid)
+
+  if (cached !== undefined) {
+    return cached
+  }
+
+  const start = starts.get(uuid)!
+  const own = start.name === SESSION_SCOPE ? str(obj(start.metadata)['hermes.session_id']) || null : null
+  const resolved = own ?? owningSessionOf(starts, sessionOf, start.parent_uuid)
+  sessionOf.set(uuid, resolved)
+
+  return resolved
+}
+
+/** One span per scope start/end pair: an open scope is running and extends to `nowSec`. */
+function spansFromScopes(
+  starts: Map<string, RelayEvent>,
+  ends: Map<string, RelayEvent>,
+  turnInputs: Map<string, string>,
+  labels: TraceLabels,
+  nowSec: number
+): TraceSpan[] {
   const spans: TraceSpan[] = []
   const sessionOf = new Map<string, null | string>()
-
-  const owningSession = (uuid: null | string | undefined): null | string => {
-    if (!uuid || !starts.has(uuid)) {
-      return null
-    }
-
-    const cached = sessionOf.get(uuid)
-
-    if (cached !== undefined) {
-      return cached
-    }
-
-    const start = starts.get(uuid)!
-    const own = start.name === SESSION_SCOPE ? str(obj(start.metadata)['hermes.session_id']) || null : null
-    const resolved = own ?? owningSession(start.parent_uuid)
-    sessionOf.set(uuid, resolved)
-
-    return resolved
-  }
 
   for (const [uuid, start] of starts) {
     const end = ends.get(uuid)
     const began = relayEventSeconds(start)
     const finished = end ? Math.max(began, relayEventSeconds(end)) : Math.max(began, nowSec)
-    const metadata = obj(start.metadata)
-    const isSubagent = start.name === SESSION_SCOPE && Boolean(metadata['hermes.parent_session_id'])
-
-    const name =
-      start.name === SESSION_SCOPE
-        ? isSubagent
-          ? labels.subagent
-          : labels.session
-        : start.name === TURN_SCOPE
-          ? turnInputs.get(uuid) || labels.turn
-          : start.name === LOGICAL_LLM_SCOPE
-            ? labels.llmCall
-            : start.category === 'llm'
-              ? str(obj(start.category_profile).model_name) || start.name
-              : start.name
 
     spans.push({
       id: uuid,
       parentId: start.parent_uuid && starts.has(start.parent_uuid) ? start.parent_uuid : null,
-      name,
+      name: spanName(start, uuid, turnInputs, labels),
       kind: KIND_BY_CATEGORY[start.category ?? ''] ?? 'CHAIN',
       start: began,
       end: finished,
       duration: finished - began,
       status: spanStatus(end),
-      sessionId: owningSession(uuid),
+      sessionId: owningSessionOf(starts, sessionOf, uuid),
       attributes: spanAttributes(start, end)
     })
   }
 
+  return spans
+}
+
+/** Rehang a delegated session's scope under the call that spawned it. In Relay it hangs off the
+ *  turn; it belongs to the `delegate_task` call that was open when it started. */
+function reparentDelegates(spans: TraceSpan[], starts: Map<string, RelayEvent>): void {
   const delegatesByParent = new Map<null | string, TraceSpan[]>()
 
   for (const span of spans) {
@@ -225,26 +255,11 @@ export function foldRelayEvents(events: RelayEvent[], labels: TraceLabels, nowSe
       }
     }
   }
-
-  attachStreams(spans, streamMarks)
-  settleOpenSessions(spans, starts, ends)
-
-  const start = spans.length ? Math.min(...spans.map(s => s.start)) : nowSec
-  const end = spans.length ? Math.max(...spans.map(s => s.end)) : nowSec
-  const root = spans.find(s => s.parentId === null && s.kind === 'AGENT')
-
-  return { rootSessionId: root?.sessionId ?? '', start, end, duration: end - start, spans }
 }
 
-/**
- * Hang each streamed-output mark on its model call and derive what the bar and inspector show:
- * the wait before the first token, then reasoning/text phases, and the text streamed so far.
- */
-function attachStreams(spans: TraceSpan[], marks: RelayEvent[]) {
-  if (marks.length === 0) {
-    return
-  }
-
+/** Group streamed-output marks onto the model call each belongs to. A managed call's mark names
+ *  only its request, so an unnamed mark takes the newest attempt already running under its parent. */
+function marksBySpan(spans: TraceSpan[], marks: RelayEvent[]): Map<TraceSpan, RelayEvent[]> {
   const byId = new Map(spans.map(span => [span.id, span]))
   const llmsByParent = new Map<string, TraceSpan[]>()
 
@@ -254,13 +269,12 @@ function attachStreams(spans: TraceSpan[], marks: RelayEvent[]) {
     }
   }
 
-  const marksBySpan = new Map<TraceSpan, RelayEvent[]>()
+  const grouped = new Map<TraceSpan, RelayEvent[]>()
 
   for (const mark of marks) {
     const at = relayEventSeconds(mark)
     const named = byId.get(str(obj(mark.data).llm_uuid))
 
-    // A managed call's mark names only its request: take the newest attempt already running.
     const target =
       named ??
       (llmsByParent.get(mark.parent_uuid ?? '') ?? [])
@@ -271,58 +285,75 @@ function attachStreams(spans: TraceSpan[], marks: RelayEvent[]) {
         )
 
     if (target) {
-      marksBySpan.set(target, [...(marksBySpan.get(target) ?? []), mark])
+      grouped.set(target, [...(grouped.get(target) ?? []), mark])
     }
   }
 
-  for (const [span, spanMarks] of marksBySpan) {
+  return grouped
+}
+
+/** Derive what the bar and inspector show for one streamed model call: the wait before the first
+ *  token, then reasoning/text phases, and the text streamed so far. */
+function streamPhases(span: TraceSpan, spanMarks: RelayEvent[]): void {
+  const first = spanMarks.find(mark => mark.name === FIRST_TOKEN_MARK)
+  const phases: TracePhase[] = []
+  const text: Record<string, string> = { reasoning: '', text: '' }
+
+  const push = (kind: TracePhase['kind'], from: number, to: number) => {
+    const start = Math.max(span.start, Math.min(from, span.end))
+    const end = Math.max(start, Math.min(to, span.end))
+    const last = phases.at(-1)
+
+    if (last?.kind === kind) {
+      last.end = end
+    } else if (end > start) {
+      phases.push({ kind, start, end })
+    }
+  }
+
+  let cursor = first ? relayEventSeconds(first) : span.start
+  let kind: TracePhase['kind'] = str(obj(first?.data).kind) === 'reasoning' ? 'reasoning' : 'text'
+
+  if (first) {
+    push('wait', span.start, cursor)
+    span.attributes['llm.first_token_s'] = cursor - span.start
+  }
+
+  for (const mark of spanMarks) {
+    if (mark.name !== STREAM_MARK) {
+      continue
+    }
+
+    const data = obj(mark.data)
+    kind = str(data.kind) === 'reasoning' ? 'reasoning' : 'text'
+    text[kind] += str(data.text)
+    push(kind, cursor, relayEventSeconds(mark))
+    cursor = relayEventSeconds(mark)
+  }
+
+  push(kind, cursor, span.end)
+  span.phases = phases
+
+  if (text.reasoning) {
+    span.attributes['llm.reasoning.value'] = text.reasoning
+  }
+
+  if (span.status === 'running' && text.text) {
+    span.attributes['output.value'] = text.text
+  }
+}
+
+/**
+ * Hang each streamed-output mark on its model call and derive what the bar and inspector show.
+ */
+function attachStreams(spans: TraceSpan[], marks: RelayEvent[]) {
+  if (marks.length === 0) {
+    return
+  }
+
+  for (const [span, spanMarks] of marksBySpan(spans, marks)) {
     spanMarks.sort((a, b) => relayEventSeconds(a) - relayEventSeconds(b))
-    const first = spanMarks.find(mark => mark.name === FIRST_TOKEN_MARK)
-    const phases: TracePhase[] = []
-    const text: Record<string, string> = { reasoning: '', text: '' }
-
-    const push = (kind: TracePhase['kind'], from: number, to: number) => {
-      const start = Math.max(span.start, Math.min(from, span.end))
-      const end = Math.max(start, Math.min(to, span.end))
-      const last = phases.at(-1)
-
-      if (last?.kind === kind) {
-        last.end = end
-      } else if (end > start) {
-        phases.push({ kind, start, end })
-      }
-    }
-
-    let cursor = first ? relayEventSeconds(first) : span.start
-    let kind: TracePhase['kind'] = str(obj(first?.data).kind) === 'reasoning' ? 'reasoning' : 'text'
-
-    if (first) {
-      push('wait', span.start, cursor)
-      span.attributes['llm.first_token_s'] = cursor - span.start
-    }
-
-    for (const mark of spanMarks) {
-      if (mark.name !== STREAM_MARK) {
-        continue
-      }
-
-      const data = obj(mark.data)
-      kind = str(data.kind) === 'reasoning' ? 'reasoning' : 'text'
-      text[kind] += str(data.text)
-      push(kind, cursor, relayEventSeconds(mark))
-      cursor = relayEventSeconds(mark)
-    }
-
-    push(kind, cursor, span.end)
-    span.phases = phases
-
-    if (text.reasoning) {
-      span.attributes['llm.reasoning.value'] = text.reasoning
-    }
-
-    if (span.status === 'running' && text.text) {
-      span.attributes['output.value'] = text.text
-    }
+    streamPhases(span, spanMarks)
   }
 }
 
@@ -357,6 +388,36 @@ function settleOpenSessions(spans: TraceSpan[], starts: Map<string, RelayEvent>,
       settle(span)
     }
   }
+}
+
+/** The folded trace's time window: the span tree's extremes, or just `nowSec` when empty. */
+function traceBounds(spans: TraceSpan[], nowSec: number): { start: number; end: number } {
+  if (spans.length === 0) {
+    return { start: nowSec, end: nowSec }
+  }
+
+  return {
+    start: Math.min(...spans.map(s => s.start)),
+    end: Math.max(...spans.map(s => s.end))
+  }
+}
+
+/**
+ * Fold one session's Relay event log into the waterfall's span tree. A span is a
+ * scope start/end pair (same uuid); an open scope is running and extends to `nowSec`.
+ */
+export function foldRelayEvents(events: RelayEvent[], labels: TraceLabels, nowSec: number): TraceDoc {
+  const { starts, ends, turnInputs, streamMarks } = indexEvents(events)
+  const spans = spansFromScopes(starts, ends, turnInputs, labels, nowSec)
+
+  reparentDelegates(spans, starts)
+  attachStreams(spans, streamMarks)
+  settleOpenSessions(spans, starts, ends)
+
+  const { start, end } = traceBounds(spans, nowSec)
+  const root = spans.find(s => s.parentId === null && s.kind === 'AGENT')
+
+  return { rootSessionId: root?.sessionId ?? '', start, end, duration: end - start, spans }
 }
 
 /** The root session's turns, oldest first. */

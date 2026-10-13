@@ -15,17 +15,33 @@ describe('feedLine', () => {
       feedLine(ev('RunFinished', { state: 'succeeded' }, 2)),
       feedLine(ev('RunPaused', {}, 3)),
       feedLine(ev('NodeStarted', { nodeId: 'draft', iteration: 0, input: 'write', maxIters: 1 }, 4)),
-      feedLine(ev('AgentTraceEvent', { nodeId: 'draft', iteration: 0, tool: { name: 'web_search', arg: 'changelog' } }, 5)),
+      feedLine(
+        ev('AgentTraceEvent', { nodeId: 'draft', iteration: 0, tool: { name: 'web_search', arg: 'changelog' } }, 5)
+      ),
       feedLine(ev('AgentTraceEvent', { nodeId: 'draft', iteration: 0, tool: { name: 'read_file', arg: '' } }, 6)),
       feedLine(ev('AgentTraceSummary', { nodeId: 'draft', iteration: 0, summary: 'done', verdict: 'PASS' }, 7)),
       feedLine(ev('AgentTraceSummary', { nodeId: 'draft', iteration: 0, summary: 'rejected', verdict: 'FAIL' }, 8)),
       feedLine(ev('AgentTraceSummary', { nodeId: 'draft', iteration: 0, summary: 'unclear' }, 9)),
       feedLine(ev('NodeFailed', { nodeId: 'boom', iteration: 0, error: 'kaput' }, 10)),
       feedLine(ev('NodeSkipped', { nodeId: 'hold', iteration: 0, reason: 'held' }, 11)),
-      feedLine(ev('GateEvaluated', { nodeId: 'gate', iteration: 0, inputs: [], decision: 'pass', route: 'go', summary: 'ship it' }, 12)),
-      feedLine(ev('GateEvaluated', { nodeId: 'gate', iteration: 0, inputs: [], decision: 'fail', route: 'rework', summary: 'add tests' }, 13)),
+      feedLine(
+        ev(
+          'GateEvaluated',
+          { nodeId: 'gate', iteration: 0, inputs: [], decision: 'pass', route: 'go', summary: 'ship it' },
+          12
+        )
+      ),
+      feedLine(
+        ev(
+          'GateEvaluated',
+          { nodeId: 'gate', iteration: 0, inputs: [], decision: 'fail', route: 'rework', summary: 'add tests' },
+          13
+        )
+      ),
       feedLine(ev('LoopAdvanced', { loopId: 'rework', iteration: 1, to: 'draft', feedback: 'tighten' }, 14)),
-      feedLine(ev('HumanWaiting', { nodeId: 'ask', iteration: 0, prompt: 'ok to ship?', who: 'brooklyn', onFail: 'halt' }, 15)),
+      feedLine(
+        ev('HumanWaiting', { nodeId: 'ask', iteration: 0, prompt: 'ok to ship?', who: 'brooklyn', onFail: 'halt' }, 15)
+      ),
       feedLine(ev('HumanResponded', { nodeId: 'ask', iteration: 0, decision: 'approved', by: 'brooklyn' }, 16)),
       feedLine(ev('HumanResponded', { nodeId: 'ask', iteration: 0, decision: 'denied', by: 'brooklyn' }, 17)),
       feedLine(ev('WaitStarted', { nodeId: 'timer', iteration: 0, until: '2026-01-01', label: 'cooldown' }, 18)),
