@@ -4803,6 +4803,19 @@ export const esOverrides = {
     largeBody: (label, size) => `${label} pesa ${size}. Hermes solo mostrará los primeros 512 KB.`,
     previewAnyway: 'Previsualizar de todos modos',
     truncated: 'Mostrando los primeros 512 KB.',
+    table: {
+      summary: (rows, columns) =>
+        [
+          rows === 1 ? '1 fila' : `${rows.toLocaleString()} filas`,
+          columns === 1 ? '1 columna' : `${columns.toLocaleString()} columnas`
+        ].join(' · '),
+      clipped: (rows, columns) =>
+        `Mostrando las primeras ${rows.toLocaleString()} filas y ${columns.toLocaleString()} columnas. El código fuente tiene el archivo completo.`,
+      empty: 'El archivo está vacío.',
+      unterminatedQuote: 'Un campo entre comillas no se cierra. Cambia a Código fuente para revisar el archivo.',
+      column: index => `Columna ${index}`,
+      regionLabel: label => `Tabla ${label}`
+    },
     noInlineTitle: 'Sin vista previa inline',
     noInlineBody: mimeType => `${mimeType || 'Este tipo de archivo'} aún puede adjuntarse como contexto.`,
     edit: 'Editar',

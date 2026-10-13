@@ -4819,6 +4819,19 @@ export const frOverrides = {
     largeBody: (label, size) => `${label} fait ${size}. Hermes n'affichera que les 512 Ko premiers.`,
     previewAnyway: 'Aperçu quand même',
     truncated: 'Affichage des 512 Ko premiers.',
+    table: {
+      summary: (rows, columns) =>
+        [
+          rows === 1 ? '1 ligne' : `${rows.toLocaleString()} lignes`,
+          columns === 1 ? '1 colonne' : `${columns.toLocaleString()} colonnes`
+        ].join(' · '),
+      clipped: (rows, columns) =>
+        `Affichage des ${rows.toLocaleString()} premières lignes et ${columns.toLocaleString()} premières colonnes. La source contient le fichier complet.`,
+      empty: 'Le fichier est vide.',
+      unterminatedQuote: 'Un champ entre guillemets n’est jamais fermé. Passez à la source pour inspecter le fichier.',
+      column: index => `Colonne ${index}`,
+      regionLabel: label => `Tableau ${label}`
+    },
     noInlineTitle: 'Aucun aperçu en ligne',
     noInlineBody: mimeType => `${mimeType || 'Ce type de fichier'} peut tout de même être joint en tant que contexte.`,
     edit: 'Modifier',

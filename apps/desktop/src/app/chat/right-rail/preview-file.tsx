@@ -22,6 +22,7 @@ import { LazyShiki as ShikiHighlighter } from '@/components/chat/shiki-highlight
 import { PageLoader } from '@/components/page-loader'
 import { Tip } from '@/components/ui/tooltip'
 import { translateNow, useI18n } from '@/i18n'
+import { tableDelimiterForPath } from '@/lib/delimited-table'
 import {
   desktopFileDiff,
   DesktopFileMissingError,
@@ -52,6 +53,8 @@ import { markPreviewTabMissing, openPreview, type PreviewTarget } from '@/store/
 import { setPreviewDirty } from '@/store/preview-edit'
 import { $connection, $currentCwd } from '@/store/session'
 import { notifyWorkspaceChanged } from '@/store/workspace-events'
+
+import { DelimitedTablePreview } from './preview-table'
 
 const SHIKI_THEME = { dark: 'github-dark-default', light: 'github-light-default' } as const
 const TEXT_PREVIEW_MAX_BYTES = 512 * 1024
@@ -1212,11 +1215,12 @@ export function LocalFilePreview({
 
   if (isText && state.text !== undefined) {
     const isMarkdown = (state.language || target.language) === 'markdown'
+    const tableDelimiter = tableDelimiterForPath(filePath)
     const hasDiff = Boolean(state.diff && state.diff.trim())
     // Order the toggle reads left→right; default lands on the most useful view.
     const modes: PreviewViewMode[] = []
 
-    if (isMarkdown || onSelectRendered) {
+    if (isMarkdown || tableDelimiter || onSelectRendered) {
       modes.push('rendered')
     }
 
@@ -1226,7 +1230,7 @@ export function LocalFilePreview({
       modes.push('diff')
     }
 
-    const autoMode: PreviewViewMode = hasDiff ? 'diff' : isMarkdown ? 'rendered' : 'source'
+    const autoMode: PreviewViewMode = hasDiff ? 'diff' : isMarkdown || tableDelimiter ? 'rendered' : 'source'
     // The pane hands an HTML file over only once Source was picked; that pick
     // outranks the diff-first default.
     const mode = userMode && modes.includes(userMode) ? userMode : onSelectRendered ? 'source' : autoMode
@@ -1275,7 +1279,9 @@ export function LocalFilePreview({
           }
         />
         <div className="min-h-0 flex-1 overflow-auto">
-          {mode === 'rendered' ? (
+          {mode === 'rendered' && tableDelimiter ? (
+            <DelimitedTablePreview delimiter={tableDelimiter} label={target.label} text={state.text} />
+          ) : mode === 'rendered' ? (
             <MarkdownPreview filePath={filePath} text={state.text} />
           ) : mode === 'diff' ? (
             <FileDiffPanel

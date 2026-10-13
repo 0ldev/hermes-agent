@@ -3521,6 +3521,15 @@ export const ruOverrides = {
     largeBody: (label, size) => `${label} — ${size}. Hermes покажет только первые 512 КБ.`,
     previewAnyway: 'Предпросмотр всё равно',
     truncated: 'Показаны первые 512 КБ.',
+    table: {
+      summary: (rows, columns) => `Строк: ${rows.toLocaleString()} · столбцов: ${columns.toLocaleString()}`,
+      clipped: (rows, columns) =>
+        `Показаны первые ${rows.toLocaleString()} строк и ${columns.toLocaleString()} столбцов. Полный файл — во вкладке «Исходник».`,
+      empty: 'Файл пуст.',
+      unterminatedQuote: 'Поле в кавычках не закрыто. Переключитесь на исходник, чтобы просмотреть файл.',
+      column: index => `Столбец ${index}`,
+      regionLabel: label => `Таблица ${label}`
+    },
     noInlineTitle: 'Нет inline-предпросмотра',
     noInlineBody: mimeType => `${mimeType || 'Этот тип файла'} всё равно можно прикрепить как контекст.`,
     edit: 'Изменить',

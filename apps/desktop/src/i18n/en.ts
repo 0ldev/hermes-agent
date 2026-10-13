@@ -4373,6 +4373,19 @@ export const en: Translations = {
     largeBody: (label, size) => `${label} is ${size}. Hermes will only show the first 512 KB.`,
     previewAnyway: 'Preview anyway',
     truncated: 'Showing first 512 KB.',
+    table: {
+      summary: (rows, columns) =>
+        [
+          rows === 1 ? '1 row' : `${rows.toLocaleString()} rows`,
+          columns === 1 ? '1 column' : `${columns.toLocaleString()} columns`
+        ].join(' · '),
+      clipped: (rows, columns) =>
+        `Showing the first ${rows.toLocaleString()} rows and ${columns.toLocaleString()} columns. Source has the full file.`,
+      empty: 'File is empty.',
+      unterminatedQuote: 'A quoted field never closes. Switch to Source to inspect the file.',
+      column: index => `Column ${index}`,
+      regionLabel: label => `${label} table`
+    },
     noInlineTitle: 'No inline preview',
     noInlineBody: mimeType => `${mimeType || 'This file type'} can still be attached as context.`,
     edit: 'Edit',

@@ -3237,6 +3237,15 @@ export const jaOverrides = {
     largeBody: (label, size) => `${label} は ${size} です。Hermes は最初の 512 KB のみを表示します。`,
     previewAnyway: 'とにかくプレビュー',
     truncated: '最初の 512 KB を表示しています。',
+    table: {
+      summary: (rows, columns) => `${rows.toLocaleString()} 行 · ${columns.toLocaleString()} 列`,
+      clipped: (rows, columns) =>
+        `最初の ${rows.toLocaleString()} 行と ${columns.toLocaleString()} 列を表示しています。全体はソースで確認できます。`,
+      empty: 'ファイルは空です。',
+      unterminatedQuote: '引用符で囲まれたフィールドが閉じていません。ソースに切り替えて確認してください。',
+      column: index => `列 ${index}`,
+      regionLabel: label => `${label} の表`
+    },
     noInlineTitle: 'インラインプレビューなし',
     noInlineBody: mimeType => `${mimeType || 'このファイルタイプ'} はコンテキストとして添付できます。`,
     edit: '編集',

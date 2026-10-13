@@ -3808,6 +3808,14 @@ export interface Translations extends NoticeTranslations {
     largeBody: (label: string, size: string) => string
     previewAnyway: string
     truncated: string
+    table: {
+      summary: (rows: number, columns: number) => string
+      clipped: (rows: number, columns: number) => string
+      empty: string
+      unterminatedQuote: string
+      column: (index: number) => string
+      regionLabel: (label: string) => string
+    }
     noInlineTitle: string
     noInlineBody: (mimeType: string) => string
     edit: string

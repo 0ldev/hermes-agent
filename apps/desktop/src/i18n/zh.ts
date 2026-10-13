@@ -4234,6 +4234,15 @@ export const zhOverrides = {
     largeBody: (label, size) => `${label} 大小为 ${size}。Hermes 只会显示前 512 KB。`,
     previewAnyway: '仍然预览',
     truncated: '显示前 512 KB。',
+    table: {
+      summary: (rows, columns) => `${rows.toLocaleString()} 行 · ${columns.toLocaleString()} 列`,
+      clipped: (rows, columns) =>
+        `仅显示前 ${rows.toLocaleString()} 行和 ${columns.toLocaleString()} 列。完整内容见“源码”。`,
+      empty: '文件为空。',
+      unterminatedQuote: '有引号字段未闭合。请切换到“源码”查看文件。',
+      column: index => `第 ${index} 列`,
+      regionLabel: label => `${label} 表格`
+    },
     noInlineTitle: '没有内联预览',
     noInlineBody: mimeType => `${mimeType || '此文件类型'} 仍可作为上下文附件。`,
     edit: '编辑',

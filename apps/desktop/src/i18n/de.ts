@@ -4809,6 +4809,20 @@ export const deOverrides = {
     largeBody: (label, size) => `${label} ist ${size}. Hermes zeigt nur die ersten 512 KB an.`,
     previewAnyway: 'Trotzdem anzeigen',
     truncated: 'Die ersten 512 KB werden angezeigt.',
+    table: {
+      summary: (rows, columns) =>
+        [
+          rows === 1 ? '1 Zeile' : `${rows.toLocaleString()} Zeilen`,
+          columns === 1 ? '1 Spalte' : `${columns.toLocaleString()} Spalten`
+        ].join(' · '),
+      clipped: (rows, columns) =>
+        `Die ersten ${rows.toLocaleString()} Zeilen und ${columns.toLocaleString()} Spalten werden angezeigt. Die Quelle enthält die vollständige Datei.`,
+      empty: 'Die Datei ist leer.',
+      unterminatedQuote:
+        'Ein Feld in Anführungszeichen wird nicht geschlossen. Wechsle zur Quelle, um die Datei zu prüfen.',
+      column: index => `Spalte ${index}`,
+      regionLabel: label => `Tabelle ${label}`
+    },
     noInlineTitle: 'Keine Inline-Vorschau',
     noInlineBody: mimeType => `${mimeType || 'Dieser Dateityp'} kann trotzdem als Kontext angehängt werden.`,
     edit: 'Bearbeiten',
