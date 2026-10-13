@@ -11,6 +11,7 @@ because every completed turn would otherwise bill an extra request.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -20,13 +21,15 @@ MAX_PREDICTION_CHARS = 200
 _CONTEXT_MESSAGES = 6
 _PER_MESSAGE_CHARS = 1500
 _NONE = "NONE"
+# Models echo the transcript's role labels back ("USER: ...").
+_ROLE_PREFIX_RE = re.compile(r"^(?:user|assistant)\s*:\s*", re.IGNORECASE)
 
 _PROMPT = (
     "You predict the next message a user will type to their AI agent. Read the recent "
     "conversation and write the single message the user is most likely to send next, in their "
     "own voice, language and register: a short reply, follow-up request or next step, at most "
-    "25 words. Do not answer on the assistant's behalf, do not explain, no quotes. If no next "
-    f"message is clearly likely, output exactly {_NONE}."
+    "25 words. Output only the message text: no role label, no quotes, no explanation, and never "
+    f"the assistant's answer. If no next message is clearly likely, output exactly {_NONE}."
 )
 
 
@@ -61,6 +64,7 @@ def predict_next_message(history: list[dict], coerce, *, main_runtime: dict | No
         logger.debug("composer prediction failed", exc_info=True)
         return ""
     text = " ".join((extract_content_or_reasoning(response) or "").split()).strip().strip("\"'")
+    text = _ROLE_PREFIX_RE.sub("", text).strip("\"'")
     if not text or text.upper().rstrip(".") == _NONE:
         return ""
     return text[:MAX_PREDICTION_CHARS]

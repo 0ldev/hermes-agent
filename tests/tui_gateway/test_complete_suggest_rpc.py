@@ -1,5 +1,6 @@
 """complete.suggest: deterministic candidates are free and always win; the aux-model prediction runs
-only when opted in AND nothing deterministic fits, and is dropped if a new turn moved history."""
+only when opted in AND nothing deterministic fits, never carries an echoed role label, and is
+dropped if a new turn moved history."""
 
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ def _reply(text):
 
 def test_suggest_gating_and_prediction_fallback(monkeypatch):
     calls = []
-    replies = ["Open the PR too"]
+    replies = ["USER: Open the PR too"]  # an echoed role label is stripped
     session = {"history": [], "history_version": 7, "history_lock": None, "agent": None}
     monkeypatch.setitem(srv._sessions, "s1", session)
 
