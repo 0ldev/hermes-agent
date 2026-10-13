@@ -33,11 +33,10 @@ import { $pluginRecords } from './plugins-store'
 import { registry } from './registry'
 import { onPluginServerRequest, type PluginServerRequestHandler } from './server-request-tap'
 import { type PluginSettingsPage, settingsPageContribution } from './settings-pages'
-
-export type { PluginSettingsPage, PluginSettingsSubpage } from './settings-pages'
 import type { Contribution } from './types'
 
 export type { PluginServerRequestHandler } from './server-request-tap'
+export type { PluginSettingsPage, PluginSettingsSubpage } from './settings-pages'
 
 export type { PluginRestOptions } from '@/hermes'
 export type { HermesOpenTarget } from '@/lib/hermes-open-target'
