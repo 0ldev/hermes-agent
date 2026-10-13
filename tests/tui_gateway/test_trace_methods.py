@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 
 def test_trace_events_reads_the_session_log_then_forwards_live_events(tmp_path, monkeypatch):
-    import tui_gateway.server as server
+    from tui_gateway import server
     from agent import relay_runtime
     from hermes_cli.observability import relay_traces
 

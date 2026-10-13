@@ -45,7 +45,7 @@ def _try_lock() -> bool:
     with _lock:
         if key in _held:
             return True
-    handle = open(workflows_dir() / _LOCK_NAME, "a+b")  # noqa: SIM115 - held for the process lifetime
+    handle = open(workflows_dir() / _LOCK_NAME, "a+b")
     try:
         if not lock_fd(handle.fileno(), wait=False):
             handle.close()

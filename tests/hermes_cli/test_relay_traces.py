@@ -21,7 +21,7 @@ def relay_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes-home"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setattr("hermes_cli.config.read_raw_config_readonly", lambda: {})
+    monkeypatch.setattr("hermes_cli.config.read_raw_config_readonly", dict)
     manager = PluginManager()
     manager._discovered = True  # a runtime with zero plugins: only first-party observers
     monkeypatch.setattr(plugins, "_plugin_manager", manager)

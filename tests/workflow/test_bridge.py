@@ -17,7 +17,7 @@ def _listening(pattern: str) -> dict:
 def _tool_call_in_a_session(session_id: str, tool: str) -> None:
     from agent import relay_runtime
 
-    import hermes_cli.observability  # noqa: F401  (recorder + workflow bridge)
+    import hermes_cli.observability
 
     key = relay_runtime.current_profile_key()
     lease = relay_runtime.SESSION_COORDINATOR.acquire_conversation(profile_key=key, session_id=session_id, platform="cli")

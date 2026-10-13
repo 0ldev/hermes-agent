@@ -23,7 +23,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
@@ -353,7 +353,7 @@ relay_runtime.SESSION_COORDINATOR.register_session_initializer(SUBSCRIBER_NAME, 
 
 def _timestamp(epoch: Any) -> datetime:
     value = epoch if isinstance(epoch, (int, float)) and not isinstance(epoch, bool) else time.time()
-    return datetime.fromtimestamp(value, tz=timezone.utc)
+    return datetime.fromtimestamp(value, tz=UTC)
 
 
 def _text(value: Any) -> str:

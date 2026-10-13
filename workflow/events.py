@@ -136,9 +136,7 @@ def event_patterns(scenario: dict) -> list[str]:
         elif kind == "wait":
             until = cfg.get("until") or {}
             spec = str(until.get("spec") or "").strip()
-            if until.get("type") == "event" and spec:
-                out.append(spec)
-            elif until.get("type") == "poll" and spec and parse_poll(spec) is None:
+            if until.get("type") == "event" and spec or until.get("type") == "poll" and spec and parse_poll(spec) is None:
                 out.append(spec)
     return out
 

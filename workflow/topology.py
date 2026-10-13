@@ -83,14 +83,14 @@ def parse_poll(spec: str) -> tuple[float, str] | None:
     every = re.match(
         r"^(?:every\s+)?(\d+(?:\.\d+)?)\s*(s|sec|secs|m|min|mins|h|hr|hrs|d|day|days)\s+(https?://\S+)",
         text,
-        re.I,
+        re.IGNORECASE,
     )
     if every:
         value = float(every.group(1))
         unit = every.group(2)[0].lower()
         seconds = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
         return max(1.0, seconds), every.group(3)
-    if re.match(r"^https?://", text, re.I):
+    if re.match(r"^https?://", text, re.IGNORECASE):
         return 60.0, text
     return None
 
