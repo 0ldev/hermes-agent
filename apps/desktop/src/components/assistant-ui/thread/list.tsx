@@ -403,6 +403,28 @@ function useThreadScrollStorageKey(sessionKey: string | null | undefined, profil
   return owner.storageKey
 }
 
+// Secondary windows (new-session scratch, subagent watch, cmd-click pop-out)
+// hide the titlebar tool cluster + session header, but the OS traffic lights
+// still sit in the top-left, so reserve the titlebar gap above the transcript.
+// Extracted from ThreadMessageListInner so the component stays within its size
+// cap; the values are computed identically, at the same render point.
+function secondaryWindowChrome() {
+  const secondaryWindow = isSecondaryWindow()
+  // NB: CSS calc() requires whitespace around the +/- operator. This string is
+  // assigned verbatim to the --sticky-human-top inline style (it does not go
+  // through Tailwind, which would auto-space it), so the spaces are load-
+  // bearing — without them the declaration is invalid, gets dropped, and the
+  // sticky user bubble falls back to its ~4px default and slides under the OS
+  // traffic lights.
+  const secondaryTitlebarGap = 'calc(var(--titlebar-height) + 0.75rem)'
+
+  const threadContentTopPad = secondaryWindow
+    ? 'pt-[calc(var(--titlebar-height)+0.75rem)]'
+    : 'pt-[calc(var(--titlebar-height)-0.5rem)]'
+
+  return { secondaryTitlebarGap, secondaryWindow, threadContentTopPad }
+}
+
 interface ThreadMessageListProps {
   clampToComposer: boolean
   components: ThreadMessageComponents
@@ -867,21 +889,9 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
     [weightedGroups, hiddenCount]
   )
 
-  // Secondary windows (new-session scratch, subagent watch, cmd-click pop-out)
-  // hide the titlebar tool cluster + session header, but the OS traffic lights
-  // still sit in the top-left, so reserve the titlebar gap above the transcript.
-  const secondaryWindow = isSecondaryWindow()
-  // NB: CSS calc() requires whitespace around the +/- operator. This string is
-  // assigned verbatim to the --sticky-human-top inline style below (it does not
-  // go through Tailwind, which would auto-space it), so the spaces are load-
-  // bearing — without them the declaration is invalid, gets dropped, and the
-  // sticky user bubble falls back to its ~4px default and slides under the OS
-  // traffic lights.
-  const secondaryTitlebarGap = 'calc(var(--titlebar-height) + 0.75rem)'
-
-  const threadContentTopPad = secondaryWindow
-    ? 'pt-[calc(var(--titlebar-height)+0.75rem)]'
-    : 'pt-[calc(var(--titlebar-height)-0.5rem)]'
+  // Secondary-window chrome (titlebar gap + top padding) lives in
+  // secondaryWindowChrome so this component stays within its size cap.
+  const { secondaryTitlebarGap, secondaryWindow, threadContentTopPad } = secondaryWindowChrome()
 
   const surfaceId = useComposerSurfaceId()
   const scrollSessionId = sessionId ?? surfaceId
@@ -1004,7 +1014,6 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // session's live state and must not file it under the new key).
   const restoredContentKeyRef = useRef<string | null | undefined>(undefined)
 
-   
   useEffect(() => {
     const el = scrollRef.current
     const content = contentRef.current
