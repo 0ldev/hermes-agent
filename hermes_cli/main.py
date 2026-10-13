@@ -1883,9 +1883,8 @@ cmd_auth = _forward_command("cmd_auth", "hermes_cli.auth_commands", "auth_comman
 cmd_status = _forward_command("cmd_status", "hermes_cli.status", "show_status", doc='Show status of all components.')
 cmd_cron = _forward_command("cmd_cron", "hermes_cli.cron", "cron_command", forward_return=True, doc='Cron job management.')
 cmd_webhook = _forward_command("cmd_webhook", "hermes_cli.webhook", "webhook_command", doc='Webhook subscription management.')
-cmd_workflow = _forward_command(
-    "cmd_workflow", "hermes_cli.subcommands.workflow", "workflow_command", doc="Stored workflow runs — list, start, signal."
-)
+cmd_workflow = _forward_command("cmd_workflow", "hermes_cli.subcommands.workflow", "workflow_command", doc="Stored workflow runs — list, start, signal.")
+cmd_trace = _forward_command("cmd_trace", "hermes_cli.trace_cmd", "run_trace_command", forward_return=True, doc='Show or export the Relay events recorded for a session.')
 cmd_kanban = _forward_command("cmd_kanban", "hermes_cli.kanban", "kanban_command", forward_return=True, doc='Multi-profile collaboration board.')
 cmd_project = _forward_command("cmd_project", "hermes_cli.projects_cmd", "projects_command", forward_return=True, doc='Manage projects (named, multi-folder workspaces).')
 cmd_hooks = _forward_command("cmd_hooks", "hermes_cli.hooks", "hooks_command", doc='Shell-hook inspection and management.')
@@ -2203,13 +2202,6 @@ def cmd_verify(args):
     sys.exit(run_verify_command(args))
 
 
-def cmd_trace(args):
-    """Show or export the Relay events recorded for a session."""
-    from hermes_cli.trace_cmd import run_trace_command
-
-    sys.exit(run_trace_command(args))
-
-
 def cmd_security(args):
     """Dispatch `hermes security <subcmd>`."""
     sub = getattr(args, "security_command", None)
@@ -2492,46 +2484,8 @@ def cmd_update(args):
         _finalize_update_output(_update_io_state)
 
 
-
-def _coalesce_session_name_args(argv: list) -> list:
-    """Join unquoted multi-word session names after -c/--continue and -r/--resume.
-
-    ``hermes -c Pokemon Agent Dev`` → ``['-c', 'Pokemon Agent Dev']``; tokens
-    are collected until the next flag (``-*``) or known top-level subcommand.
-    """
-    _SUBCOMMANDS = {
-        "chat", "model", "gateway", "setup", "whatsapp", "whatsapp-cloud", "login", "logout",
-        "auth", "status", "cron", "doctor", "config", "pairing", "skills", "tools", "trace", "mcp",
-        "sessions", "insights", "update", "uninstall", "profile", "dashboard", "serve",
-        "desktop", "gui", "honcho", "claw", "plugins", "security", "acp", "webhook", "peer",
-        "memory", "dump", "debug", "backup", "import", "completion", "logs", "usage", "workflow",
-    }
-    _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
-
-    result = []
-    i = 0
-    while i < len(argv):
-        token = argv[i]
-        if token in _SESSION_FLAGS:
-            result.append(token)
-            i += 1
-            # Collect subsequent non-flag, non-subcommand tokens as one name
-            parts: list = []
-            while (
-                i < len(argv)
-                and not argv[i].startswith("-")
-                and argv[i] not in _SUBCOMMANDS
-            ):
-                parts.append(argv[i])
-                i += 1
-            if parts:
-                result.append(" ".join(parts))
-        else:
-            result.append(token)
-            i += 1
-    return result
-
-
+# Split into hermes_cli/main_session_args.py; re-imported so the hermes_cli.main seam keeps working.
+from hermes_cli.main_session_args import _coalesce_session_name_args
 from hermes_cli.profile_cmd import cmd_profile
 
 
@@ -2837,8 +2791,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "send", "sessions", "setup",
         "skin", "skills", "slack", "status", "tools", "trace", "uninstall", "update",
         "usage", "vault",
-        "webhook", "whatsapp", "whatsapp-cloud", "worktree", "chat", "secrets", "security",
-        "workflow",
+        "webhook", "whatsapp", "whatsapp-cloud", "worktree", "chat", "secrets", "security", "workflow",
         "browser",
         "verify",
         # Plugin commands missing from top-level --help is an accepted trade-off.
