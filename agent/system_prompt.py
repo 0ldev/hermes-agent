@@ -2,10 +2,12 @@
 
 Built once per session and reused across turns (only context compression
 triggers a rebuild) so the upstream prefix cache stays warm.  Three tiers are
-joined with ``\\n\\n``: ``stable`` (identity, guidance, env hints, coding brief,
-platform hints), ``context`` (workspace snapshot, caller ``system_message``,
-context files) and ``volatile`` (skills index, memory, USER.md, external memory
-provider, timestamp line).  See ``references/system-prompt-invariant.md``.
+joined with ``\\n\\n``: ``stable`` (identity, role/model guidance, coding brief
+and non-workspace platform hints), ``context`` (caller ``system_message``,
+context files and workspace guidance) and ``volatile`` (skills index, toolset
+guidance, memory, USER.md, external memory provider and runtime metadata).
+Stable content is fixed within a session, not identical across arbitrary toolsets.
+See ``references/system-prompt-invariant.md``.
 """
 
 from __future__ import annotations
@@ -301,11 +303,6 @@ def _kanban_guidance_block(agent: Any) -> Optional[str]:
     if _kanban_guidance is None and "kanban_show" in names and owned_kanban_task():
         _kanban_guidance = KANBAN_GUIDANCE
     return _kanban_guidance or None
-
-
-def _tool_guidance_block(agent: Any) -> Optional[str]:
-    """All tool and role-aware guidance, retained for direct callers."""
-    return " ".join(g for g in (_toolset_guidance_block(agent), _kanban_guidance_block(agent)) if g) or None
 
 
 def _skills_prompt(agent: Any) -> str:
@@ -739,12 +736,12 @@ def _join_tier(parts: list[Optional[str]]) -> str:
 
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
-    guidance and the coding brief), ``context`` (caller ``system_message``, project
+    role/model guidance and the coding brief), ``context`` (caller ``system_message``, project
     context files, workspace snapshot and remaining workspace guidance) and
-    ``volatile`` (skills index, memory, user profile, external memory block,
+    ``volatile`` (skills index, toolset guidance, memory, user profile, external memory block,
     timestamp line, runtime environment hints).  Worktree-dependent blocks follow project context so a
     shared context file can remain in the longest common prefix across worktrees.
-    Never re-rendered mid-session."""
+    Stable bytes may still differ across toolsets or roles. Never re-rendered mid-session."""
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
@@ -784,9 +781,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # worktree snapshot whose later position would improve their prefix.
         stable_parts.extend([*coding_trailing_parts, *post_workspace_parts])
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
-    # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
-    # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
-    volatile_parts: list[str] = [_toolset_guidance_block(agent), skills_prompt, *_memory_parts(agent)]
+    # Keep a shared skills index before toolset guidance; otherwise an earlier guidance
+    # difference discards the whole index on longest-prefix backends. Memory follows
+    # guidance so differing memory content does not discard shared instructions either.
+    volatile_parts: list[str] = [skills_prompt, _toolset_guidance_block(agent), *_memory_parts(agent)]
     # Plugin sections are confined to one coarse anchor in the volatile tail so
     # a resumed process can reconstruct the stable prefix without re-running plugins.
     volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))

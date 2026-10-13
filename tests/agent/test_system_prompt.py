@@ -89,14 +89,16 @@ def test_kanban_guidance_requires_worker_task_at_agent_init(monkeypatch, task_id
     ("t_worker", True, True),   # the dispatcher-owned worker
     ("t_worker", False, False), # cron run / delegate child inheriting the worker's env
 ])
-def test_kanban_guidance_fallback_requires_owned_worker_task(monkeypatch, task_id, owner, expected):
+def test_kanban_guidance_fallback_requires_owned_worker_task(monkeypatch, tmp_path, task_id, owner, expected):
     """Prompt fallback preserves the worker boundary when init was bypassed: tool access
     is not identity, and an inherited HERMES_KANBAN_TASK is not ownership (#112486)."""
     from contextlib import nullcontext
 
     from agent.delegation_context import non_dispatcher_owned_context
     from agent.prompt_builder import KANBAN_GUIDANCE
-    from agent.system_prompt import _tool_guidance_block
+    from agent.system_prompt import _kanban_guidance_block
+
+    monkeypatch.chdir(tmp_path)
 
     if task_id is None:
         monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
@@ -106,7 +108,12 @@ def test_kanban_guidance_fallback_requires_owned_worker_task(monkeypatch, task_i
     delattr(agent, "_kanban_worker_guidance")
 
     with nullcontext() if owner else non_dispatcher_owned_context():
-        assert (_tool_guidance_block(agent) == KANBAN_GUIDANCE) is expected
+        assert (_kanban_guidance_block(agent) == KANBAN_GUIDANCE) is expected
+        parts = build_system_prompt_parts(agent)
+
+    assert parts["stable"].count(KANBAN_GUIDANCE) == int(expected)
+    assert KANBAN_GUIDANCE not in parts["context"]
+    assert KANBAN_GUIDANCE not in parts["volatile"]
 
 
 @pytest.mark.parametrize("stores", [(True, True), (False, True), (True, False), (False, False)])
@@ -232,30 +239,31 @@ def _prompt_parts(agent):
         return build_system_prompt_parts(agent)
 
 
-def test_toolset_guidance_does_not_split_stable_prompt_prefix(monkeypatch, tmp_path):
-    """Regression for #137307: tool-restricted children reuse the stable prefix."""
-    monkeypatch.chdir(tmp_path)
-    full = _make_agent(valid_tool_names={"memory", "session_search", "skill_manage"})
-    memory_only = _make_agent(valid_tool_names={"memory"})
-    restricted = _make_agent(valid_tool_names={"terminal"})
-    with (
-        patch("agent.system_prompt._skills_prompt", return_value=""),
-        patch("agent.system_prompt._auto_load_parts", return_value=[]),
-        patch("agent.system_prompt._coding_parts", return_value=([], [], [])),
-        patch("agent.system_prompt._post_workspace_parts", return_value=[]),
-    ):
-        full_parts = _prompt_parts(full)
-        memory_only_parts = _prompt_parts(memory_only)
-        restricted_parts = _prompt_parts(restricted)
+@pytest.mark.parametrize("memory, session_search, skill_manage", [
+    (False, False, False), (False, False, True),
+    (False, True, False), (False, True, True),
+    (True, False, False), (True, False, True),
+    (True, True, False), (True, True, True),
+])
+def test_memory_session_search_skills_guidance_stays_out_of_stable_tier(
+    monkeypatch, tmp_path, memory, session_search, skill_manage,
+):
+    """#137307: each available guidance block belongs only to the volatile tier."""
+    from agent.prompt_builder import SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE
 
-    assert full_parts["stable"] == memory_only_parts["stable"] == restricted_parts["stable"]
-    assert "Memory is the narrow exception" not in full_parts["stable"]
-    assert "Memory is the narrow exception" in full_parts["volatile"]
-    assert "(skill_manage)" in full_parts["volatile"]
-    assert "session_search" in full_parts["volatile"]
-    assert "(skill_manage)" not in memory_only_parts["volatile"]
-    assert "session_search" not in memory_only_parts["volatile"]
-    assert "Memory is the narrow exception" not in restricted_parts["volatile"]
+    monkeypatch.chdir(tmp_path)
+    names = {name for name, enabled in (
+        ("memory", memory), ("session_search", session_search), ("skill_manage", skill_manage),
+    ) if enabled}
+    parts = build_system_prompt_parts(_make_agent(valid_tool_names=names, skip_context_files=True))
+    for guidance, enabled in (
+        ("Memory is the narrow exception", memory),
+        (SESSION_SEARCH_GUIDANCE, session_search),
+        (SKILLS_GUIDANCE, skill_manage),
+    ):
+        assert guidance not in parts["stable"]
+        assert guidance not in parts["context"]
+        assert parts["volatile"].count(guidance) == int(enabled)
 
 
 def _init_code_repo(path):
