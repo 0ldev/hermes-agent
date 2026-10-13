@@ -118,6 +118,7 @@ function pinnedLiveTail(
   // HAS landed (multi-turn: the snapshot ends with the previous turn's reply
   // while the new turn's row is still in flight).
   const lastIncoming = incoming.at(-1)?.message
+
   const replyLanded = Boolean(
     lastIncoming && lastIncoming.role === 'assistant' && hasVisibleText(lastIncoming)
   )
@@ -178,11 +179,15 @@ export function syncRepositoryIncrementally(
   // to preserve: clear the tree first (leaves→root), then rebuild clean.
   const incomingIds = new Set(incoming.map(({ message }) => message.id))
   const disjoint = existing.length > 0 && !existing.some(({ message }) => incomingIds.has(message.id))
+
   // Mid-run, an incoming snapshot that omits the live streamed tail must not
-  // delete it (#119686). The pin only ever applies to the reconcile below —
-  // a fully disjoint thread switch still clears the tree (the transcript
-  // moved to an unrelated conversation).
-  const pinned = pinLiveTail ? pinnedLiveTail(repository, incomingIds, incoming) : { ids: new Set<string>(), headId: null }
+  // delete it (#119686). A disjoint sync (a switch to another conversation, or
+  // an empty snapshot before the session loads) clears the whole tree below,
+  // so there is nothing to pin, and a pinned head would name a deleted row.
+  const pinned =
+    pinLiveTail && !disjoint
+      ? pinnedLiveTail(repository, incomingIds, incoming)
+      : { ids: new Set<string>(), headId: null }
 
   // Steady-state streaming: same message set, one item changed. Skip the
   // whole-transcript rewrite, the prune scan, and the second export. resetHead

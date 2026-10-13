@@ -119,8 +119,37 @@ describe('adapter sync keeps the live streamed tail when a mid-run snapshot omit
     expect(visibleText(core)).toEqual(['question', 'the full answer'])
   })
 
+  it('switches to an unrelated running thread without pinning the old tail', () => {
+    const streamedTail = message('a-stream', 'partial answer', RUNNING_STATUS)
+
+    const core = new IncrementalExternalStoreRuntimeCore(
+      adapterWith(repositoryOf([userMessage('u1', 'question'), streamedTail], 'a-stream'))
+    )
+
+    // Routing to another session that is itself mid-run: the incoming set
+    // shares no id with the tree, so the old thread is cleared, not pinned.
+    core.setAdapter(
+      adapterWith(repositoryOf([userMessage('u2', 'q2'), message('a2', 'answer two')]), { isRunning: true })
+    )
+
+    expect(visibleText(core)).toEqual(['q2', 'answer two'])
+  })
+
+  it('renders an empty snapshot mid-run (session not loaded yet) without throwing', () => {
+    const streamedTail = message('a-stream', 'partial answer', RUNNING_STATUS)
+
+    const core = new IncrementalExternalStoreRuntimeCore(
+      adapterWith(repositoryOf([userMessage('u1', 'question'), streamedTail], 'a-stream'))
+    )
+
+    core.setAdapter(adapterWith(repositoryOf([]), { isRunning: true }))
+
+    expect(visibleText(core)).toEqual([])
+  })
+
   it('drops the abandoned draft once a replacement reply has landed (same-second rewrite)', () => {
     const user = userMessage('u1', 'question')
+
     const streamedTail = message('a-stream', 'partial answer', RUNNING_STATUS)
 
     // Force identical millisecond timestamps: a rewrite that lands the same
@@ -133,6 +162,7 @@ describe('adapter sync keeps the live streamed tail when a mid-run snapshot omit
 
     // The rewrite lands with its OWN id while the run is still marked running.
     const rewritten = message('a-final', 'rewritten answer', RUNNING_STATUS)
+
     ;(rewritten as { createdAt: Date }).createdAt = user.createdAt
 
     core.setAdapter(adapterWith(repositoryOf([user, rewritten], 'a-final')))
