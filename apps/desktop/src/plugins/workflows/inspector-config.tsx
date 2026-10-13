@@ -8,10 +8,8 @@
 
 import {
   Callout,
-  CopyButton,
   Field,
   FieldStatusSlot,
-  Input,
   SegmentedControl,
   SidePanelMeta,
   SidePanelMetaRow,
@@ -26,32 +24,10 @@ import { useState } from 'react'
 import { $currentId, $webhooks } from './documents'
 import { type Graph, isLoop, type OpResult, type Problem, setKind } from './graph'
 import { BranchEditor } from './inspector-branches'
+import { BudgetsSection, GoalSection, KnobRows, TriggerRows, WaitRows } from './inspector-config-sections'
 import type { StepDef } from './scenario'
-import {
-  hasField,
-  type Join,
-  ON_FAIL_OPTIONS,
-  type OnFail,
-  STEP_KINDS,
-  type StepConfig,
-  TRIGGER_KIND_OPTIONS,
-  type TriggerKind,
-  WAIT_KIND_OPTIONS,
-  type WaitKind
-} from './scenario'
+import { hasField, STEP_KINDS, type StepConfig } from './scenario'
 import { statusFor } from './validation'
-
-const JOIN_OPTIONS: { id: Join; label: string }[] = [
-  { id: 'all', label: 'All arrive' },
-  { id: 'any', label: 'First arrives' }
-]
-
-/** A comma list as typed, kept as the array the runner reads. */
-const listOf = (text: string) =>
-  text
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean)
 
 function PayloadEditor({ onChange, value }: { onChange: (v?: Record<string, unknown>) => void; value?: object }) {
   const [draft, setDraft] = useState(() => (value ? JSON.stringify(value, null, 2) : ''))
@@ -145,182 +121,11 @@ export function ConfigTab({
           />
         </SidePanelMetaRow>
 
-        {has('model') && (
-          <SidePanelMetaRow
-            control
-            label="Model"
-            tip="Overrides the model for this step only. Empty inherits this profile's default."
-          >
-            <Input
-              className="nodrag"
-              onChange={e => onChange({ model: e.target.value })}
-              placeholder="inherit"
-              value={config.model ?? ''}
-            />
-          </SidePanelMetaRow>
-        )}
+        <KnobRows config={config} has={has} inputs={inputs} isHuman={isHuman} onChange={onChange} />
 
-        {has('onFail') && (
-          <SidePanelMetaRow
-            control
-            label="On failure"
-            tip={
-              isHuman
-                ? 'What the run does if nobody answers in time.'
-                : 'What the run does when this step exhausts its retries.'
-            }
-          >
-            <SegmentedControl
-              className="nodrag w-full"
-              onChange={(v: OnFail) => onChange({ onFail: v })}
-              options={ON_FAIL_OPTIONS.map(o => ({ id: o.value, label: o.label }))}
-              value={config.onFail ?? 'retry'}
-            />
-          </SidePanelMetaRow>
-        )}
+        {has('on') && <TriggerRows config={config} onChange={onChange} st={st} webhook={webhook} />}
 
-        {has('assignee') && (
-          <SidePanelMetaRow control label="Assignee" tip="Who the run parks on. Empty means whoever is watching.">
-            <Input
-              className="nodrag"
-              onChange={e => onChange({ assignee: e.target.value })}
-              placeholder="anyone"
-              size="sm"
-              value={config.assignee ?? ''}
-            />
-          </SidePanelMetaRow>
-        )}
-
-        {has('notify') && (
-          <SidePanelMetaRow
-            control
-            label="Also ask in"
-            tip="Chats that get the question too (send_message targets, comma-separated). Answer there with /workflow approve <code>."
-          >
-            <Input
-              className="nodrag"
-              onChange={e => onChange({ notify: listOf(e.target.value) })}
-              placeholder="telegram, discord:#ops"
-              size="sm"
-              value={(config.notify ?? []).join(', ')}
-            />
-          </SidePanelMetaRow>
-        )}
-
-        {has('toolsets') && (
-          <SidePanelMetaRow
-            control
-            label="Toolsets"
-            tip="Narrow what this step may use (comma-separated toolset names). Empty uses the profile's own set — worth narrowing for a step a webhook or an event can start."
-          >
-            <Input
-              className="nodrag"
-              onChange={e => onChange({ toolsets: listOf(e.target.value) })}
-              placeholder="profile default"
-              size="sm"
-              value={(config.toolsets ?? []).join(', ')}
-            />
-          </SidePanelMetaRow>
-        )}
-
-        {has('join') && inputs > 1 && (
-          <SidePanelMetaRow
-            control
-            label="Starts when"
-            tip="With several inputs: wait for every one, or start on the first to arrive and ignore the rest."
-          >
-            <SegmentedControl
-              className="nodrag w-full"
-              onChange={(v: Join) => onChange({ join: v })}
-              options={JOIN_OPTIONS}
-              value={config.join ?? 'all'}
-            />
-          </SidePanelMetaRow>
-        )}
-
-        {has('on') && (
-          <>
-            <SidePanelMetaRow control label="Starts on" tip="What begins a run of this workflow.">
-              <SegmentedControl
-                className="nodrag w-full"
-                onChange={(v: TriggerKind) => onChange({ on: { spec: config.on?.spec ?? '', type: v } })}
-                options={TRIGGER_KIND_OPTIONS.map(o => ({ id: o.value, label: o.label }))}
-                value={config.on?.type ?? 'manual'}
-              />
-            </SidePanelMetaRow>
-            {(config.on?.type ?? 'manual') !== 'manual' && (
-              <SidePanelMetaRow
-                control
-                label="When"
-                status={st('on')}
-                tip={TRIGGER_KIND_OPTIONS.find(o => o.value === (config.on?.type ?? 'manual'))?.hint}
-              >
-                <Input
-                  className="nodrag"
-                  onChange={e => onChange({ on: { spec: e.target.value, type: config.on?.type ?? 'cron' } })}
-                  placeholder={
-                    (config.on?.type ?? 'cron') === 'cron'
-                      ? 'every 2h'
-                      : (config.on?.type ?? 'cron') === 'webhook'
-                        ? 'saved on the gateway as wf:<workflow>'
-                        : 'github.pull_request.merged'
-                  }
-                  size="sm"
-                  value={config.on?.spec ?? ''}
-                />
-              </SidePanelMetaRow>
-            )}
-            {(config.on?.type ?? 'manual') === 'webhook' && webhook && (
-              <>
-                <SidePanelMetaRow control label="Route" tip="POST this path on the webhook gateway.">
-                  <div className="flex items-center gap-1">
-                    <Input className="nodrag min-w-0 flex-1" readOnly size="sm" value={`/webhooks/${webhook.route}`} />
-                    <CopyButton appearance="icon" buttonSize="icon-xs" text={`/webhooks/${webhook.route}`} />
-                  </div>
-                </SidePanelMetaRow>
-                <SidePanelMetaRow control label="HMAC" tip="Stored under HERMES_HOME/workflows/secrets.json.">
-                  <div className="flex items-center gap-1">
-                    <Input className="nodrag min-w-0 flex-1" readOnly size="sm" value={webhook.secret} />
-                    <CopyButton appearance="icon" buttonSize="icon-xs" text={webhook.secret} />
-                  </div>
-                </SidePanelMetaRow>
-              </>
-            )}
-          </>
-        )}
-
-        {has('until') && (
-          <>
-            <SidePanelMetaRow control label="Waiting on" tip="What the world has to do before the run moves on.">
-              <SegmentedControl
-                className="nodrag w-full"
-                onChange={(v: WaitKind) => onChange({ until: { spec: config.until?.spec ?? '', type: v } })}
-                options={WAIT_KIND_OPTIONS.map(o => ({ id: o.value, label: o.label }))}
-                value={config.until?.type ?? 'timer'}
-              />
-            </SidePanelMetaRow>
-            <SidePanelMetaRow
-              control
-              label="Condition"
-              status={st('until')}
-              tip={WAIT_KIND_OPTIONS.find(o => o.value === (config.until?.type ?? 'timer'))?.hint}
-            >
-              <Input
-                className="nodrag"
-                onChange={e => onChange({ until: { spec: e.target.value, type: config.until?.type ?? 'timer' } })}
-                placeholder={
-                  (config.until?.type ?? 'timer') === 'timer'
-                    ? '24h'
-                    : (config.until?.type ?? 'timer') === 'event'
-                      ? 'github.pull_request.merged'
-                      : 'every 5m'
-                }
-                size="sm"
-                value={config.until?.spec ?? ''}
-              />
-            </SidePanelMetaRow>
-          </>
-        )}
+        {has('until') && <WaitRows config={config} onChange={onChange} st={st} />}
 
         {has('maxLoops') && (
           <Field label="Max takes" row tip="How many takes the gate may send back before giving up.">
@@ -348,75 +153,9 @@ export function ConfigTab({
         )}
       </SidePanelMeta>
 
-      {has('goal') && (
-        <SidePanelSection
-          label={isHuman ? 'Ask' : 'Goal'}
-          title={
-            isHuman
-              ? "Shown when the run parks here. Your answer is this step's output."
-              : "Sent to delegate_task as the subagent's goal."
-          }
-        >
-          <FieldStatusSlot status={st('goal')}>
-            <Textarea
-              className="nodrag nowheel min-h-24 text-[0.75rem]"
-              onChange={e => onChange({ goal: e.target.value })}
-              rows={3}
-              value={config.goal ?? ''}
-            />
-          </FieldStatusSlot>
-        </SidePanelSection>
-      )}
+      {has('goal') && <GoalSection config={config} isHuman={isHuman} onChange={onChange} st={st} />}
 
-      {budgets && (
-        <SidePanelSection label="Budgets">
-          {has('maxIterations') && (
-            <Field label="Iterations" row tip="Tool-call budget before the subagent must stop.">
-              <Stepper
-                className="nodrag"
-                max={200}
-                min={1}
-                onChange={v => onChange({ maxIterations: v })}
-                step={5}
-                value={config.maxIterations ?? 20}
-              />
-            </Field>
-          )}
-          {has('maxRetries') && (
-            <Field label="Retries" row tip="Takes before the step reports failed.">
-              <Stepper
-                className="nodrag"
-                max={10}
-                min={0}
-                onChange={v => onChange({ maxRetries: v })}
-                value={config.maxRetries ?? 1}
-              />
-            </Field>
-          )}
-          {has('timeoutMins') && (
-            <Field
-              label="Timeout"
-              row
-              tip={
-                isHuman
-                  ? 'How long the run parks here before nobody answering counts as a failure. ∞ = wait forever.'
-                  : 'Wall-clock cap on a single take. ∞ = no cap.'
-              }
-            >
-              <Stepper
-                className="nodrag"
-                max={180}
-                min={0}
-                onChange={v => onChange({ timeoutMins: v })}
-                step={5}
-                suffix={(config.timeoutMins ?? 0) > 0 ? 'min' : undefined}
-                unboundedAtMin
-                value={config.timeoutMins ?? 0}
-              />
-            </Field>
-          )}
-        </SidePanelSection>
-      )}
+      {budgets && <BudgetsSection config={config} has={has} isHuman={isHuman} onChange={onChange} />}
 
       {has('pinPayload') && (config.on?.type ?? 'manual') !== 'manual' && (
         <SidePanelSection
