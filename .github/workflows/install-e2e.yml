@@ -122,7 +122,7 @@ concurrency:
 jobs:
   pick-releases:
     name: Pick release tags
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       tags: ${{ steps.pick.outputs.tags }}
@@ -131,7 +131,7 @@ jobs:
       # checkout: no blobs (filter), no other files (sparse), but DO fetch
       # tags -- they are the whole input, and the default shallow checkout
       # has none.
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           filter: blob:none
           fetch-tags: true
@@ -186,7 +186,7 @@ jobs:
   generate-matrix:
     name: Expand combinations
     needs: pick-releases
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       linux: ${{ steps.gen.outputs.linux }}
@@ -196,7 +196,7 @@ jobs:
       windows-legs: ${{ steps.gen.outputs.windows-legs }}
       macos-legs: ${{ steps.gen.outputs.macos-legs }}
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           sparse-checkout: scripts/sandbox/generate-e2e-matrix.mjs
           sparse-checkout-cone-mode: false
@@ -222,7 +222,7 @@ jobs:
   bundle-inputs:
     name: Validate pinned bundle transitions
     # Bundled legs need dispatch-only manifests.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       windows: ${{ steps.inputs.outputs.windows }}
@@ -230,7 +230,7 @@ jobs:
       windows-arch: ${{ steps.inputs.outputs.windows-arch }}
       macos-arch: ${{ steps.inputs.outputs.macos-arch }}
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
       - id: inputs
         env:
           BUNDLE_WINDOWS_MANIFEST: ${{ inputs.windows-bundle-manifest }}
@@ -335,10 +335,10 @@ jobs:
   # looks it up by that name.
   leg-player:
     name: Upload leg player
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           sparse-checkout: tests/install/e2e-assets/playback.html
           sparse-checkout-cone-mode: false
@@ -362,7 +362,7 @@ jobs:
     name: Source matrix gate
     if: always() && inputs.release == true
     needs: [generate-matrix, linux, windows, macos]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Evaluate source legs
@@ -404,10 +404,10 @@ jobs:
     name: Result chart
     if: always()
     needs: [leg-player, pick-releases, linux, windows, macos, bundle-inputs, windows-bundled, macos-bundled]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
         with:
           sparse-checkout: |
             scripts/sandbox/generate-e2e-matrix.mjs

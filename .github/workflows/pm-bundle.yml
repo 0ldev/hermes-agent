@@ -73,13 +73,13 @@ jobs:
           # - label: linux-arm64
           #   runner: ubuntu-latest-32-arm-core
           - label: darwin-arm64
-            runner: macos-15
+            runner: blacksmith-6vcpu-macos-15
           - label: darwin-x64
-            runner: macos-15-intel
+            runner: blacksmith-6vcpu-macos-15
           - label: win32-x64
-            runner: windows-latest-32-core
+            runner: blacksmith-32vcpu-windows-2025
           - label: win32-arm64
-            runner: windows-latest-32-arm-core
+            runner: blacksmith-4vcpu-windows-2025
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:

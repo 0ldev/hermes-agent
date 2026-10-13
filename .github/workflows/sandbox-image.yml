@@ -45,29 +45,27 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest-32-core
+            runner: blacksmith-32vcpu-ubuntu-2404
             platform: linux/amd64
           - arch: arm64
-            runner: ubuntu-latest-32-arm-core
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       - name: Build (${{ matrix.arch }})
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: useblacksmith/build-push-action@v2 # v7.1.0
         with:
           context: .
           file: docker/sandbox-desktop.Dockerfile
           platforms: ${{ matrix.platform }}
           tags: ${{ env.IMAGE_NAME }}:test
           load: true
-          cache-from: type=gha,scope=sandbox-${{ matrix.arch }}
-          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,mode=max,scope=sandbox-{0}', matrix.arch) || '' }}
 
       # The contract: the launcher, cua-driver and a headed Chromium work as `pn`.
       - name: Smoke
@@ -83,18 +81,18 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest-32-core
+            runner: blacksmith-32vcpu-ubuntu-2404
             platform: linux/amd64
           - arch: arm64
-            runner: ubuntu-latest-32-arm-core
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: useblacksmith/checkout@v1 # v7.0.1
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       - name: Log in to Docker Hub
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -104,7 +102,7 @@ jobs:
 
       - name: Push ${{ matrix.arch }} by digest
         id: push
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: useblacksmith/build-push-action@v2 # v7.1.0
         with:
           context: .
           file: docker/sandbox-desktop.Dockerfile
@@ -112,7 +110,6 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=sandbox-${{ matrix.arch }}
 
       - name: Export digest
         run: |
@@ -131,7 +128,7 @@ jobs:
   merge:
     if: ${{ !cancelled() && github.repository == 'NousResearch/hermes-agent' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
     needs: [publish]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     environment: container-publish
     steps:
@@ -141,8 +138,8 @@ jobs:
           pattern: sandbox-digest-*
           merge-multiple: true
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       - name: Log in to Docker Hub
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
