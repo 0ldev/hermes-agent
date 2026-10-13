@@ -25,9 +25,12 @@ desktop-sourced sessions.
 """
 
 import json
+import logging
 from typing import Callable, Optional
 
 from tools.registry import registry, tool_error
+
+logger = logging.getLogger(__name__)
 
 ACTIONS = ("read", "edit", "list", "open", "create", "run")
 
@@ -66,6 +69,9 @@ def workflow_tool(
             events.publish(events.START, {"workflowId": doc["id"], "runId": run_id, "payload": payload,
                                           "source": "tool"}, source="tool")
         except Exception as exc:
+            # The tool must answer the model, not crash the turn; the traceback is the only
+            # place the failure is visible outside the returned error string.
+            logger.debug("workflow run start failed", exc_info=True)
             return tool_error(f"Failed to start the run: {exc}")
         return json.dumps({"runId": run_id, "status": "queued", "workflow": doc["id"]}, ensure_ascii=False)
 
@@ -97,6 +103,7 @@ def workflow_tool(
     try:
         raw = callback(payload)
     except Exception as exc:
+        logger.debug("Workflows canvas call failed", exc_info=True)
         return tool_error(f"Failed to reach the Workflows canvas: {exc}")
 
     if not raw:

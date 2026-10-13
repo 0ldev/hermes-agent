@@ -13,12 +13,15 @@ the late import keeps the module-level dependency pointing one way.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
 
 from workflow import trace
 from workflow.store import load_run, save_run
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
@@ -114,6 +117,9 @@ def ensure_running(run_id: str, execute_fn=None) -> None:
         try:
             advance(run_id, execute_fn=execute_fn)
         except Exception as exc:
+            # Step failures are handled inside advance; an escape here is the run's loop itself
+            # breaking, so the traceback is logged before the run is marked failed.
+            logger.exception("workflow run %s crashed", run_id)
             state = load_run(run_id)
             if state is not None:
                 state["status"] = "failed"

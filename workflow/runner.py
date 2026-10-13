@@ -24,6 +24,7 @@ This file is the loop and its doors. What it reads, waits on and records through
 
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
@@ -64,6 +65,8 @@ from workflow.topology import (
     title_of,
 )
 from workflow.waits import park_human, park_wait, parked_runs, rearm_all
+
+logger = logging.getLogger(__name__)
 
 ExecuteFn = Callable[[str, str, Any, dict], dict]
 
@@ -459,6 +462,9 @@ class _Loop:
             try:
                 result = fut.result()
             except Exception as exc:
+                # A step worker failure is the step's result, not a crash of the loop; the
+                # traceback is the only place it is visible, the state keeps just the message.
+                logger.debug("workflow %s step %s raised", kind, node_id, exc_info=True)
                 result = {"ok": False, "error": str(exc)} if kind == "agent" else None
             step = self.steps[node_id]
             if kind == "agent":

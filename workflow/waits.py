@@ -140,8 +140,9 @@ def http_ok(url: str) -> bool:
     try:
         with create_ssrf_safe_client(timeout=10, follow_redirects=True) as client:
             return 200 <= client.get(url).status_code < 300
-    except Exception as exc:
-        logger.debug("workflow poll of %s failed: %s", url, exc)
+    except Exception:
+        # Any probe failure just means "not ok yet" — the poll re-arms and tries again.
+        logger.debug("workflow poll of %s failed", url, exc_info=True)
         return False
 
 

@@ -56,7 +56,7 @@ def recording(run_id: str) -> Iterator[Any]:
         lease = None
         try:
             # Importing the package registers the recorder's session initializer.
-            import hermes_cli.observability  # noqa: F401
+            import hermes_cli.observability
 
             lease = relay_runtime.SESSION_COORDINATOR.acquire_conversation(
                 profile_key=key[0], session_id=key[1], platform=_SURFACE,
@@ -159,6 +159,8 @@ def recorded_events(run_id: str) -> tuple[list[dict[str, Any]], bool]:
     try:
         on = relay_traces.policy().get("enabled", True) is not False
     except Exception:
+        # A policy read must never break reading the run's trace; the default is recording on.
+        logger.debug("workflow trace policy read failed; assuming recording is on", exc_info=True)
         on = True
     events, _truncated = relay_traces.read_session_events(get_hermes_home(), run_session_id(run_id))
     return events, on

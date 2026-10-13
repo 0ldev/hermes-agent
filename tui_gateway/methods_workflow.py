@@ -49,6 +49,9 @@ def _(rid, params: dict) -> dict:
     try:
         saved["triggers"] = sync_triggers(saved["docs"])
     except Exception as exc:
+        # The save itself succeeded; trigger wiring is best-effort and its error is reported
+        # in the response, so the canvas still shows the saved documents.
+        logger.debug("workflow trigger sync failed", exc_info=True)
         saved["triggers"] = {"error": str(exc)}
     return _ok(rid, saved)
 
@@ -65,6 +68,7 @@ def _(rid, params: dict) -> dict:
     try:
         saved["triggers"] = sync_triggers(saved["docs"])
     except Exception as exc:
+        logger.debug("workflow trigger sync failed", exc_info=True)
         saved["triggers"] = {"error": str(exc)}
     return _ok(rid, saved)
 

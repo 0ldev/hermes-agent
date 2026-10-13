@@ -63,7 +63,8 @@ def hook_url(workflow_id: str) -> str:
         from hermes_cli.webhook import _get_webhook_base_url
 
         base = _get_webhook_base_url()
-    except Exception:
+    except ImportError as exc:
+        logger.debug("webhook base url unavailable (%s); using the default", exc)
         base = "http://localhost:8644"
     return f"{base}/webhooks/{route_name(workflow_id)}"
 
@@ -82,7 +83,7 @@ def ensure_webhook_platform() -> None:
         if _is_webhook_enabled():
             return
         write_platform_config_field("webhook", "enabled", True)
-    except Exception as exc:
+    except (ImportError, OSError) as exc:
         logger.debug("could not enable webhook platform: %s", exc)
 
 
@@ -137,7 +138,7 @@ def is_workflow_capability_route(route: str, route_config: dict) -> bool:
 def _owned_jobs() -> list[dict]:
     try:
         from cron.jobs import list_jobs
-    except Exception:
+    except ImportError:
         return []
     out = []
     for job in list_jobs(include_disabled=True):
@@ -167,7 +168,7 @@ def sync_cron_jobs(docs: list[dict] | None = None) -> list[str]:
     docs = docs if docs is not None else load_documents()["docs"]
     try:
         from cron.jobs import create_job, remove_job, update_job
-    except Exception as exc:
+    except ImportError as exc:
         logger.debug("cron unavailable, skipping workflow cron sync: %s", exc)
         return []
 

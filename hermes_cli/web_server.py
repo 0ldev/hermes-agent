@@ -279,7 +279,9 @@ async def _lifespan(app: FastAPI):
             from workflow import reactor as workflow_reactor
 
             workflow_reactor.ensure_started()
-        except Exception:
+        except (ImportError, RuntimeError):
+            # A reactor that cannot start (broken import, no thread) must not keep the
+            # web server from coming up; the gateway can still take the lease over.
             _log.warning("Workflow reactor did not start", exc_info=True)
 
     # Reap idle/dead keep-alive PTY sessions (30-min TTL).

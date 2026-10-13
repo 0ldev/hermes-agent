@@ -41,6 +41,8 @@ def _(rid, params: dict) -> dict:
     try:
         recording = relay_traces.policy().get("enabled", True) is not False
     except Exception:
+        # A policy read must never break reading the trace; the default is recording on.
+        logger.debug("trace policy read failed; assuming recording is on", exc_info=True)
         recording = True
     events, truncated = relay_traces.read_session_events(get_hermes_home(), stored_id)
     return _ok(rid, {"session_id": stored_id, "events": events, "truncated": truncated, "recording": recording})

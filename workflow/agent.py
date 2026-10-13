@@ -7,8 +7,11 @@ chat, so prompt-cache on that conversation stays intact.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def build_prompt(goal: str, context: str, payload: Any, profile: str | None = None) -> str:
@@ -101,7 +104,7 @@ def _default_model() -> tuple[str | None, str | None]:
         from hermes_constants import get_hermes_home
 
         return _read_config_model(get_hermes_home())
-    except Exception:
+    except (ImportError, OSError):
         return None, None
 
 
@@ -123,10 +126,11 @@ def resolve_step_model(config: dict | None) -> tuple[str, str | None, str | None
                     model = str(profile_model)
                 if profile_provider:
                     provider = str(profile_provider)
-        except Exception:
+        except (ImportError, OSError):
             # A profile that won't read is not a reason to fail the step —
             # fall through to this home's default, same as no profile at all.
-            pass
+            logger.debug("workflow step profile '%s' did not read; using this home's default", profile,
+                         exc_info=True)
     if not model or not provider:
         default_model, default_provider = _default_model()
         if not model and default_model:
@@ -169,7 +173,7 @@ def execute_agent_step(
         prompt = "Continue from where you left off. The last turn was interrupted.\n\n" + prompt
     try:
         from run_agent import AIAgent
-    except Exception as exc:
+    except ImportError as exc:
         return {"ok": False, "error": f"could not load the agent: {exc}"}
 
     iterations = cfg.get("maxIterations") or 20
@@ -205,6 +209,9 @@ def execute_agent_step(
         agent = AIAgent(**kwargs)
         text = agent.chat(prompt)
     except Exception as exc:
+        # A step failure is the step's result, not a crash of the run: the error string is what
+        # the canvas shows, so the traceback goes to the log at debug for diagnosis.
+        logger.debug("workflow agent step failed", exc_info=True)
         return {"ok": False, "error": str(exc)}
 
     raw = str(text or "")
