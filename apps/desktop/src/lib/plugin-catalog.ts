@@ -20,7 +20,9 @@
  */
 
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
+import { BACKEND_BOOT_WAIT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
 import { activeGatewayProfileKey, requestGatewayForProfile } from '@/store/gateway'
+import { $gatewayState } from '@/store/session'
 
 export const CATALOG_ORIGIN = 'https://hermes-agent.nousresearch.com'
 export const CATALOG_PICKER_URL = `${CATALOG_ORIGIN}/docs/plugins?embed=picker`
@@ -78,8 +80,41 @@ export type CatalogRequest = (
   params: { name: string }
 ) => Promise<CatalogLookupReply | null | undefined>
 
-const activeProfileRequest: CatalogRequest = (method, params) =>
-  requestGatewayForProfile<CatalogLookupReply>(activeGatewayProfileKey(), method, params, LOOKUP_TIMEOUT_MS)
+/**
+ * Resolves once the active profile's gateway is open. A link that launches
+ * Desktop arrives before the backend is up; routing the RPC then stalls in
+ * profile resolution, which `gateway.request`'s own timeout doesn't cover.
+ * Bounded by the renderer's cold-boot budget, so the link always ends in the
+ * dialog or a visible error.
+ */
+export function whenGatewayOpen(timeoutMs = BACKEND_BOOT_WAIT_TIMEOUT_MS): Promise<void> {
+  if ($gatewayState.get() === 'open') {
+    return Promise.resolve()
+  }
+
+  let stop = () => {}
+
+  const open = new Promise<void>(resolve => {
+    stop = $gatewayState.listen(state => {
+      if (state === 'open') {
+        resolve()
+      }
+    })
+  })
+
+  return withTimeout(open, timeoutMs, 'Hermes gateway did not open').finally(() => stop())
+}
+
+const activeProfileRequest: CatalogRequest = async (method, params) => {
+  await whenGatewayOpen()
+
+  // Bounds route resolution as well as the request itself.
+  return withTimeout(
+    requestGatewayForProfile<CatalogLookupReply>(activeGatewayProfileKey(), method, params, LOOKUP_TIMEOUT_MS),
+    LOOKUP_TIMEOUT_MS,
+    'plugins.catalog.lookup timed out'
+  )
+}
 
 async function lookupFromFeed(name: string, fetchImpl: typeof fetch): Promise<PluginCatalogLookup> {
   let rows: unknown

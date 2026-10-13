@@ -1,5 +1,8 @@
 import { JSON_RPC_METHOD_NOT_FOUND, JsonRpcGatewayError } from '@hermes/shared'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import * as gatewayStore from '@/store/gateway'
+import { $gatewayState } from '@/store/session'
 
 import { type CatalogLookupReply, type CatalogRequest, lookupPluginCatalogEntry } from './plugin-catalog'
 
@@ -79,5 +82,59 @@ describe('lookupPluginCatalogEntry', () => {
       error: 'unavailable'
     })
     expect(noFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('lookupPluginCatalogEntry at cold start (the link launched Desktop)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    $gatewayState.set('idle')
+  })
+
+  it('waits for the gateway to open before routing the lookup, then resolves', async () => {
+    $gatewayState.set('connecting')
+    const found = { name: 'weather', repo: 'https://github.com/x/weather', sha: SHA, subdir: '' }
+
+    const spy = vi
+      .spyOn(gatewayStore, 'requestGatewayForProfile')
+      .mockImplementation(async () => ({ status: 'found', entry: found }) as never)
+
+    const pending = lookupPluginCatalogEntry('weather', { fetchImpl: noFetch })
+    await Promise.resolve()
+    expect(spy).not.toHaveBeenCalled() // nothing is routed while the backend is still booting
+
+    $gatewayState.set('open')
+
+    await expect(pending).resolves.toMatchObject({ ok: true, entry: { name: 'weather', repo: found.repo, sha: SHA } })
+    expect(spy).toHaveBeenCalledWith(
+      expect.any(String),
+      'plugins.catalog.lookup',
+      { name: 'weather' },
+      expect.any(Number)
+    )
+  })
+
+  it('ends in "unavailable" when route resolution stalls, instead of never settling', async () => {
+    vi.useFakeTimers()
+    $gatewayState.set('open')
+    vi.spyOn(gatewayStore, 'requestGatewayForProfile').mockImplementation(() => new Promise(() => {}))
+
+    const pending = lookupPluginCatalogEntry('weather', { fetchImpl: noFetch })
+    await vi.advanceTimersByTimeAsync(25_000)
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'unavailable' })
+  })
+
+  it('ends in "unavailable" when the gateway never opens', async () => {
+    vi.useFakeTimers()
+    $gatewayState.set('connecting')
+    const spy = vi.spyOn(gatewayStore, 'requestGatewayForProfile')
+
+    const pending = lookupPluginCatalogEntry('weather', { fetchImpl: noFetch })
+    await vi.advanceTimersByTimeAsync(181_000)
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'unavailable' })
+    expect(spy).not.toHaveBeenCalled()
   })
 })
