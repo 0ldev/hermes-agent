@@ -160,15 +160,17 @@ describe('ephemeral preview panes are scrubbed from the persisted tree', () => {
   })
 
   it('the ephemeral predicate reads the namespace the minting side owns', async () => {
-    const { tree } = await setup()
+    await setup()
+
+    const { isEphemeralPane } = await import('@/components/pane-shell/tree/store-persist')
 
     // One definition: the scrubber keys off `store/preview-explicit`'s prefix,
     // not a second copy of the literal.
-    expect(tree.isEphemeralPane(`${PREVIEW_TILE_PREFIX}:file:notes`)).toBe(true)
-    expect(tree.isEphemeralPane('workspace')).toBe(false)
-    expect(tree.isEphemeralPane('route-tile:/skills')).toBe(false)
+    expect(isEphemeralPane(`${PREVIEW_TILE_PREFIX}:file:notes`)).toBe(true)
+    expect(isEphemeralPane('workspace')).toBe(false)
+    expect(isEphemeralPane('route-tile:/skills')).toBe(false)
     // The bare namespace is not itself a pane id.
-    expect(tree.isEphemeralPane(PREVIEW_TILE_PREFIX)).toBe(false)
+    expect(isEphemeralPane(PREVIEW_TILE_PREFIX)).toBe(false)
   })
 
   // `vi.resetModules()` forces the preview-tile graph to be re-imported inside
@@ -176,7 +178,8 @@ describe('ephemeral preview panes are scrubbed from the persisted tree', () => {
   // import alone blows the 15s default. Same reason `layout-flipped-sides` and
   // `connections` raise theirs.
   it('pane ids minted by the preview tile mirror satisfy the shared predicate', { timeout: 30_000 }, async () => {
-    const { registry, tree } = await setup()
+    const { registry } = await setup()
+    const { isEphemeralPane } = await import('@/components/pane-shell/tree/store-persist')
 
     const { $previewTabs } = await import('@/store/preview')
     const { watchPreviewTiles } = await import('@/app/chat/preview-tile')
@@ -193,7 +196,7 @@ describe('ephemeral preview panes are scrubbed from the persisted tree', () => {
     const ephemeralPaneIds = registry
       .getArea('panes')
       .map(contribution => contribution.id)
-      .filter(id => tree.isEphemeralPane(id))
+      .filter(id => isEphemeralPane(id))
 
     expect(ephemeralPaneIds).toEqual(['preview-tile:file:notes'])
   })
