@@ -1,119 +1,63 @@
-"""Tests for pull-diagnostics capability negotiation.
+"""Pull diagnostics are requested only from a server that serves them (#126949).
 
-A server that does not advertise ``textDocument/diagnostic`` support
-must never be asked for pull diagnostics — and a server that advertises
-it but rejects the request with -32601 must be remembered as
-pull-incapable after the first rejection.  Regression guard for a bug
-where a push-only typescript server was asked once per diagnostics
-call, forever (~58k -32601 errors over a week).
+A push-only server asked for ``textDocument/diagnostic`` answers -32601 at once, and the wait loop used
+to re-issue the pull on every pass: thousands of rejected requests per edited file.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 
 from agent.lsp.client import LSPClient
-from agent.lsp.protocol import LSPRequestError
-
 
 MOCK_SERVER = str(Path(__file__).parent / "_mock_lsp_server.py")
 
 
 def _client(workspace: Path, script: str, **env_extra: str) -> LSPClient:
-    env = {
-        "MOCK_LSP_SCRIPT": script,
-        "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
-        **env_extra,
-    }
-    return LSPClient(
-        server_id=f"mock-{script}",
-        workspace_root=str(workspace),
-        command=[sys.executable, MOCK_SERVER],
-        env=env,
-        cwd=str(workspace),
-    )
+    env = {"MOCK_LSP_SCRIPT": script, "PYTHONPATH": os.environ.get("PYTHONPATH", ""), **env_extra}
+    return LSPClient(server_id=f"mock-{script}", workspace_root=str(workspace),
+                     command=[sys.executable, MOCK_SERVER], env=env, cwd=str(workspace))
 
 
-# ---------------------------------------------------------------------------
-# Capability extraction (pure static)
-# ---------------------------------------------------------------------------
-
-
-def test_supports_pull_diagnostics_advertised():
-    caps = {"textDocument": {"diagnostic": {"provider": {"workspaceDiagnostics": False}}}}
-    assert LSPClient._supports_pull_diagnostics(caps) is True
-
-
-def test_supports_pull_diagnostics_absent():
-    assert LSPClient._supports_pull_diagnostics({}) is False
-    assert LSPClient._supports_pull_diagnostics({"textDocument": {}}) is False
-
-
-def test_supports_pull_diagnostics_false_provider():
-    caps = {"textDocument": {"diagnostic": {"provider": False}}}
-    assert LSPClient._supports_pull_diagnostics(caps) is False
-
-
-def test_supports_pull_diagnostics_true_provider():
-    caps = {"textDocument": {"diagnostic": {"provider": True}}}
-    assert LSPClient._supports_pull_diagnostics(caps) is True
-
-
-# ---------------------------------------------------------------------------
-# Unadvertised capability: no pull request is ever sent
-# ---------------------------------------------------------------------------
+async def _requests_during_wait(client: LSPClient, path: Path, budget: float) -> int:
+    version = await client.open_file(str(path))
+    before = client._next_id  # the client's own JSON-RPC id counter: one per request sent
+    await client.wait_for_diagnostics(str(path), version, timeout=budget)
+    return client._next_id - before
 
 
 @pytest.mark.asyncio
-async def test_unadvertised_pull_never_requested(tmp_path: Path):
-    """A push-only server (stale script: no provider advertisement) must
-    not receive a single textDocument/diagnostic request."""
-    client = _client(tmp_path, "stale")
+async def test_rejected_pull_is_not_reissued(tmp_path: Path):
+    """``silent`` advertises pull, rejects it with -32601 and never pushes: the worst case."""
+    path = tmp_path / "x.py"
+    path.write_text("x = 1\n", encoding="utf-8")
+    client = _client(tmp_path, "silent")
     await client.start()
     try:
-        assert client._pull_diagnostics_supported is False
-        send = AsyncMock()
-        client._send_request_with_retry = send
-        await client._pull_document_diagnostics(str(tmp_path / "x.py"))
-        send.assert_not_called()
+        assert await _requests_during_wait(client, path, 1.0) == 1
+        assert await _requests_during_wait(client, path, 0.3) == 0  # latched for the process
     finally:
         await client.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_advertised_pull_stays_enabled(tmp_path: Path):
-    """A server that advertises the provider keeps the pull path live."""
-    client = _client(tmp_path, "clean")
+@pytest.mark.parametrize(("mode", "pulls"), [("static", True), ("dynamic", True), ("none", False)])
+async def test_pull_follows_server_capability(tmp_path: Path, mode: str, pulls: bool):
+    """``diagnosticProvider`` at initialize or a dynamic registration enables pull; neither keeps it off."""
+    path = tmp_path / "x.py"
+    path.write_text("x = 1\n", encoding="utf-8")
+    client = _client(tmp_path, "clean", MOCK_LSP_PULL=mode)
     await client.start()
     try:
-        assert client._pull_diagnostics_supported is True
-    finally:
-        await client.shutdown()
-
-
-# ---------------------------------------------------------------------------
-# Lying server: advertised but -32601 — remembered after first rejection
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_method_not_found_is_remembered(tmp_path: Path):
-    client = _client(tmp_path, "clean")
-    await client.start()
-    try:
-        assert client._pull_diagnostics_supported is True
-        send = AsyncMock(
-            side_effect=LSPRequestError(-32601, "method not found")
-        )
-        client._send_request_with_retry = send
-        await client._pull_document_diagnostics(str(tmp_path / "x.py"))
-        assert client._pull_diagnostics_supported is False
-        # Second call short-circuits without another doomed request.
-        await client._pull_document_diagnostics(str(tmp_path / "y.py"))
-        send.assert_awaited_once()
+        for _ in range(40):  # the dynamic registration arrives just after `initialized`
+            if client._pull_supported == pulls:
+                break
+            await asyncio.sleep(0.05)
+        assert client._pull_supported is pulls
+        assert await _requests_during_wait(client, path, 2.0) == int(pulls)
     finally:
         await client.shutdown()

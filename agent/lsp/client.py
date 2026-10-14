@@ -164,12 +164,12 @@ class LSPClient:
         self._next_id: int = 0
         self._pending: dict[int, asyncio.Future] = {}
 
-        # Server → client requests; anything else gets method-not-found.  Capability (un)registration
-        # and diagnostic refresh are acknowledged but not acted on: we re-pull on every touch anyway.
+        # Server → client requests; anything else gets method-not-found.  A pull-diagnostics registration
+        # turns pull on; other (un)registrations and diagnostic refresh are acknowledged only.
         self._request_handlers: dict[str, Callable[[Any], Awaitable[Any]]] = {
             "window/workDoneProgress/create": self._handle_null,
             "workspace/configuration": self._handle_workspace_configuration,
-            "client/registerCapability": self._handle_null,
+            "client/registerCapability": self._handle_register_capability,
             "client/unregisterCapability": self._handle_null,
             "workspace/workspaceFolders": self._handle_workspace_folders,
             "workspace/diagnostic/refresh": self._handle_null,
@@ -182,12 +182,11 @@ class LSPClient:
         self._docs: dict[str, _DocState] = {}  # keyed by absolute path (NOT URI)
         self._state: str = "stopped"
         self._sync_kind: int = 1  # 1=Full, 2=Incremental
-        # Whether the server advertises (and actually honors) the
-        # ``textDocument/diagnostic`` pull endpoint.  Flipped off either at
-        # initialize (capability absent) or on the first -32601 — servers
-        # that don't support pull would otherwise fail once per call,
-        # forever.
-        self._pull_diagnostics_supported: bool = True
+        # Does the server serve ``textDocument/diagnostic``?  Set from ``diagnosticProvider`` at initialize or
+        # a dynamic registration, and latched off by the first -32601: a push-only server asked anyway
+        # answered thousands of rejected pulls per wait (#126949).
+        self._pull_supported: bool = False
+        self._pull_registered = asyncio.Event()  # wakes a push-only wait when pull is registered mid-wait
         self._stopping: bool = False
         # Waiters snapshot ``_push_counter`` and treat any increase as "recheck the
         # predicate" — avoids the asyncio.Event sticky-state trap.
@@ -390,7 +389,7 @@ class LSPClient:
         }
         result = await asyncio.wait_for(self._send_request("initialize", params), timeout=INITIALIZE_TIMEOUT)
         caps = result.get("capabilities") or {}
-        self._pull_diagnostics_supported = self._supports_pull_diagnostics(caps)
+        self._pull_supported = caps.get("diagnosticProvider") not in (None, False)
         sync = caps.get("textDocumentSync")
         if isinstance(sync, dict):
             sync = sync.get("change")
@@ -398,14 +397,6 @@ class LSPClient:
         await self._send_notification("initialized", {})
         if self._init_options:  # vtsls/eslint only pick config up via didChangeConfiguration
             await self._send_notification("workspace/didChangeConfiguration", {"settings": self._init_options})
-
-    @staticmethod
-    def _supports_pull_diagnostics(capabilities: dict) -> bool:
-        diag = capabilities.get("textDocument")
-        provider = diag.get("diagnostic", {}).get("provider") if isinstance(diag, dict) else None
-        # LSP: the provider entry (bool or registration options) advertises
-        # pull-diagnostics support; absent means push-only.
-        return provider is not None and provider is not False
 
     async def shutdown(self) -> None:
         """Best-effort graceful shutdown: ``shutdown`` + ``exit``, wait ``SHUTDOWN_GRACE`` for the
@@ -552,6 +543,14 @@ class LSPClient:
     async def _handle_null(self, params: Any) -> Any:
         return None
 
+    async def _handle_register_capability(self, params: Any) -> Any:
+        """Note a dynamic ``textDocument/diagnostic`` registration (we advertise ``dynamicRegistration``)."""
+        regs = params.get("registrations") if isinstance(params, dict) else None
+        if any(isinstance(r, dict) and r.get("method") == "textDocument/diagnostic" for r in regs or ()):
+            self._pull_supported = True
+            self._pull_registered.set()
+        return None
+
     async def _handle_workspace_folders(self, params: Any) -> Any:
         return self._workspace_folders()
 
@@ -661,12 +660,13 @@ class LSPClient:
 
     # ---- diagnostics: pull + wait ----
 
-    async def _pull_document_diagnostics(self, path: str) -> None:
+    async def _pull_document_diagnostics(self, path: str) -> bool:
         """Send ``textDocument/diagnostic`` for one file into the pull store.  Results are tagged with the
         version captured at send time, so a didChange racing past the request makes them stale
-        automatically.  Silently no-ops on errors (server may not support pull)."""
-        if not self._pull_diagnostics_supported:
-            return
+        automatically.  Returns False when the server rejected the pull, so the caller stops re-issuing it
+        for the rest of its wait (an error reply is instant and would otherwise spin the wait loop)."""
+        if not self._pull_supported:
+            return False
         abs_path = os.path.abspath(path)
         doc = self._docs.get(abs_path)
         sent_version = doc.version if doc else -1
@@ -675,21 +675,15 @@ class LSPClient:
                 "textDocument/diagnostic", {"textDocument": {"uri": file_uri(abs_path)}},
                 timeout=DIAGNOSTICS_REQUEST_TIMEOUT,
             )
-        except (TimeoutError, LSPRequestError, LSPProtocolError) as e:
-            if isinstance(e, LSPRequestError) and e.code == ERROR_METHOD_NOT_FOUND:
-                # Server rejects the pull endpoint outright — remember and
-                # stop asking, so a push-only server doesn't error once per
-                # diagnostics call for the process lifetime.
-                self._pull_diagnostics_supported = False
-                logger.debug(
-                    "[%s] server has no textDocument/diagnostic support; disabling pull",
-                    self.server_id,
-                )
-                return
+        except TimeoutError:
+            return True
+        except (LSPRequestError, LSPProtocolError) as e:
             logger.debug("[%s] document diagnostic pull failed: %s", self.server_id, e)
-            return
+            if isinstance(e, LSPRequestError) and e.code == ERROR_METHOD_NOT_FOUND:
+                self._pull_supported = False  # advertised but not served: never ask this process again
+            return False
         if not isinstance(result, dict):
-            return
+            return True
         related = result.get("relatedDocuments")
         reports = [(abs_path, result, sent_version)]
         if isinstance(related, dict):
@@ -701,6 +695,7 @@ class LSPClient:
                 d = self._docs.setdefault(doc_path, _DocState(version=-1))
                 d.pull = items
                 d.pull_version = d.version if tag is None else tag
+        return True
 
     async def wait_for_diagnostics(self, path: str, version: int, *, mode: str = "document",
                                    timeout: Optional[float] = None) -> bool:
@@ -715,21 +710,29 @@ class LSPClient:
         now = asyncio.get_event_loop().time
         deadline = now() + timeout
         abs_path = os.path.abspath(path)
+        rejected = False
         while True:
             if not self._connection_is_open():
                 raise LSPProtocolError("server connection closed while waiting for diagnostics")
             remaining = deadline - now()
             if remaining <= 0:
                 return False
-            # Concurrent: document pull + push wait.
-            tasks = {
-                asyncio.create_task(self._pull_document_diagnostics(abs_path)),
-                asyncio.create_task(self._wait_for_fresh_push(abs_path, version, remaining)),
-            }
-            _done, pending = await asyncio.wait(tasks, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+            # Concurrent: document pull (while the server serves it) + push wait.  A push-only pass also
+            # wakes on a dynamic pull registration: pyright registers just after `initialized`, often
+            # after the first wait began, and then stops pushing.
+            pull_task = None
+            tasks = {asyncio.create_task(self._wait_for_fresh_push(abs_path, version, remaining))}
+            if self._pull_supported and not rejected:
+                pull_task = asyncio.create_task(self._pull_document_diagnostics(abs_path))
+                tasks.add(pull_task)
+            elif not self._pull_registered.is_set():
+                tasks.add(asyncio.create_task(self._pull_registered.wait()))
+            done, pending = await asyncio.wait(tasks, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+            if pull_task in done:
+                rejected = pull_task.exception() is not None or not pull_task.result()
             doc = self._docs.get(abs_path)
             if doc and doc.fresh(version):
                 return True

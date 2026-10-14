@@ -79,6 +79,38 @@ def write_message(obj):
     sys.stdout.buffer.flush()
 
 
+def read_client_message():
+    """Next request/notification; skips the client's replies to our own requests (registerCapability)."""
+    while (msg := read_message()) is not None and "method" not in msg:
+        pass
+    return msg
+
+
+# MOCK_LSP_PULL: "static" (default) advertises pull at initialize, "dynamic" registers it after
+# `initialized`, "none" models a push-only server that never offers it.
+def _pull_mode():
+    return os.environ.get("MOCK_LSP_PULL", "static")
+
+
+def _server_capabilities(script):
+    caps = {"textDocumentSync": 2 if script == "incremental" else 1}
+    if _pull_mode() == "static":
+        caps["diagnosticProvider"] = {"interFileDependencies": False, "workspaceDiagnostics": False}
+    return caps
+
+
+def _register_dynamic_pull():
+    if _pull_mode() == "dynamic":
+        write_message({"jsonrpc": "2.0", "id": "reg-1", "method": "client/registerCapability", "params": {
+            "registrations": [{"id": "pull", "method": "textDocument/diagnostic", "registerOptions": {}}]}})
+
+
+def _rejects_pull(script):
+    # These scripts model push-only servers that still advertise pull, so the ghost can't be papered
+    # over by the pull channel; "none" never advertised it.
+    return script in {"stale", "slow_push", "versionless", "silent"} or _pull_mode() == "none"
+
+
 def main():
     script = os.environ.get("MOCK_LSP_SCRIPT", "clean")
     documents = {}
@@ -124,7 +156,7 @@ def main():
         script = "clean"
 
     while True:
-        msg = read_message()
+        msg = read_client_message()
         if msg is None:
             return 0
 
@@ -137,28 +169,12 @@ def main():
                 return 0
             if script in {"slow", "slow_tree"}:
                 time.sleep(1.0)
-            capabilities = {
-                "textDocumentSync": 2 if script == "incremental" else 1,
-            }
-            if script not in {"stale", "slow_push"}:
-                # LSP-spec advertisement for the pull endpoint — push-only
-                # scripts (stale/slow_push) omit it AND reject the pull
-                # request with -32601, so both capability-gate paths are
-                # exercisable.
-                capabilities["textDocument"] = {
-                    "diagnostic": {
-                        "provider": {
-                            "interFileDependencies": False,
-                            "workspaceDiagnostics": False,
-                        }
-                    }
-                }
             write_message(
                 {
                     "jsonrpc": "2.0",
                     "id": msg["id"],
                     "result": {
-                        "capabilities": capabilities,
+                        "capabilities": _server_capabilities(script),
                         "serverInfo": {"name": "mock-lsp", "version": "0.1"},
                     },
                 }
@@ -168,6 +184,7 @@ def main():
             continue
 
         if msg.get("method") == "initialized":
+            _register_dynamic_pull()
             continue
 
         if msg.get("method") == "workspace/didChangeConfiguration":
@@ -278,9 +295,7 @@ def main():
             continue
 
         if msg.get("method") == "textDocument/diagnostic":
-            if script in {"stale", "slow_push", "versionless", "silent"}:
-                # These scripts model push-only servers so the ghost
-                # can't be papered over by the pull channel.
+            if _rejects_pull(script):
                 write_message(
                     {
                         "jsonrpc": "2.0",
