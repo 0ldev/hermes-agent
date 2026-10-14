@@ -1050,51 +1050,6 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
 
 
 
-# Content search is ripgrep-backed and therefore blind to the text inside
-# PDFs and Office documents: `read_file` extracts them, `search_files` does
-# not. A folder of scanned-in paperwork answers "does anything here mention
-# OATH/ECB?" with an empty result set, and a model reasonably concludes the
-# answer is no — a confident false negative on exactly the corpus a document
-# search is most useful for. Naming the unsearched documents turns the silent
-# miss into a next step. Indexing them properly is a much larger change.
-_SEARCH_SCAN_CAP = 2000
-_SEARCH_HINT_MAX_FILES = 10
-
-
-def _unsearched_documents(root: str, file_glob: str = None) -> list[str]:
-    """Extractable documents under ``root`` that a content search cannot see.
-
-    ``file_glob`` is honoured so a search the caller already narrowed away from
-    documents (``*.py``) is not told to go read the PDFs it deliberately
-    excluded. A glob that *does* select documents (``*.pdf``) still reports —
-    that is the case where the blind spot bites hardest.
-    """
-    import fnmatch
-
-    from tools.read_extract import ANYDOC_EXTENSIONS, EXTRACTABLE_EXTENSIONS
-
-    exts = EXTRACTABLE_EXTENSIONS | ANYDOC_EXTENSIONS
-    found: list[str] = []
-    seen = 0
-    try:
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for name in filenames:
-                seen += 1
-                if seen > _SEARCH_SCAN_CAP:
-                    return found
-                if os.path.splitext(name)[1].lower() not in exts:
-                    continue
-                if file_glob and not fnmatch.fnmatch(name, file_glob):
-                    continue
-                found.append(os.path.join(dirpath, name))
-                if len(found) >= _SEARCH_HINT_MAX_FILES:
-                    return found
-    except OSError:
-        pass
-    return found
-
-
 def search_tool(pattern: str, target: str = "content", path: str = ".",
                 file_glob: str | None = None, limit: int = 50, offset: int = 0,
                 output_mode: str = "content", context: int = 0,
@@ -1170,22 +1125,16 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
                 f"You have run this exact search {count} times consecutively. "
                 "The results have not changed. Use the information you already have.")
 
-        # Zero content matches, but extractable documents sit in scope: say so
-        # rather than let an empty result read as "the text is not here".
-        if (
-            target == "content"
-            and not result_dict.get("error")
-            and not result_dict.get("matches")
-        ):
-            docs = _unsearched_documents(resolved_search_path, file_glob)
-            if docs:
-                result_dict["_documents_not_searched"] = (
-                    "Content search does not read inside PDFs or Office documents. "
-                    f"{len(docs)} such file(s) in scope were NOT searched; the text "
-                    "you are looking for may be in one. Open them with read_file "
-                    "(it extracts them) before concluding the content is absent: "
-                    + ", ".join(docs)
-                )
+        # rg skips binary files; search the extracted text of PDFs/Office documents in
+        # scope with the same pattern (first page only: doc hits are not paginated).
+        if target == "content" and offset == 0 and not result_dict.get("error"):
+            from tools.file_tools_document_search import search_documents
+            result_dict.update(search_documents(
+                _get_file_ops(task_id), path, pattern, file_glob, output_mode,
+                admit=lambda p: not get_read_block_error(_resolved_match_path(p, task_id)),
+                redact=lambda p, text: redact_sensitive_text(
+                    text, file_read=True,
+                    secret_file=_is_secret_file_arg(_resolved_match_path(p, task_id)))))
 
         # Structured like ``_warning`` above: text appended after the JSON
         # breaks every json.loads consumer (execute_code RPC, strict tool-message

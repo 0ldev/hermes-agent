@@ -1,57 +1,50 @@
-"""A content search that finds nothing must not imply the text is absent.
+"""search_files must not be blind to the text inside PDFs and Office documents.
 
-search_files is ripgrep-backed and cannot see inside PDFs or Office documents,
-while read_file extracts them. On a folder of paperwork that mismatch produces
-a confident false negative: the search returns empty and the answer is in the
-PDF sitting next to it.
+ripgrep skips binary files while read_file extracts them, so a content search
+over a folder of paperwork returned a confident zero while the answer sat in the
+.docx next to the searched .txt (#101427).
 """
 
 import json
+import zipfile
 
-from tools.file_tools import _unsearched_documents, search_tool
+from tools.file_tools import read_file_tool, search_tool
 
 
-def test_lists_documents_a_content_search_cannot_read(tmp_path):
-    (tmp_path / "notes.txt").write_text("nothing relevant here")
+def _docx(path, paragraphs):
+    body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("[Content_Types].xml", (
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="xml" ContentType="application/xml"/></Types>'))
+        z.writestr("word/document.xml", (
+            '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/'
+            f'wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>'))
+
+
+def test_content_search_finds_document_text_at_read_file_line_numbers(tmp_path):
+    (tmp_path / "cover_letter.txt").write_text("nothing relevant here\n")
+    doc = tmp_path / "violations.docx"
+    _docx(doc, ["Case file 2026-114", "Background.", "Notice of violation issued by OATH and the ECB."])
+
+    out = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path)))
+    assert f"{doc}\n  3: Notice of violation issued by OATH" in out["document_matches"]
+    # The reported line is the line read_file shows for that path.
+    assert "3|Notice of violation issued by OATH" in read_file_tool(path=str(doc), offset=3, limit=1)
+
+    # A search narrowed to source files never walks or reports documents.
+    scoped = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path),
+                                    file_glob="*.py"))
+    assert not any(key.startswith(("document", "_documents")) for key in scoped)
+
+
+def test_documents_that_cannot_be_extracted_are_named_not_dropped(tmp_path):
+    (tmp_path / "notes.txt").write_text("OATH appears in plain text too\n")
     (tmp_path / "tickets.pdf").write_bytes(b"%PDF-1.4 binary")
     (tmp_path / "sheet.xlsx").write_bytes(b"PK\x03\x04")
 
+    # Named even when the text files matched: the unread PDF may hold the better answer.
     out = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path)))
-    hint = out.get("_documents_not_searched", "")
+    hint = out["_documents_not_searched"]
     assert "tickets.pdf" in hint and "sheet.xlsx" in hint
-    assert "read_file" in hint
-
-
-def test_no_hint_when_there_are_no_documents(tmp_path):
-    (tmp_path / "notes.txt").write_text("nothing relevant here")
-    out = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path)))
-    assert "_documents_not_searched" not in out
-
-
-def test_no_hint_when_the_search_matched(tmp_path):
-    (tmp_path / "notes.txt").write_text("OATH appears here")
-    (tmp_path / "tickets.pdf").write_bytes(b"%PDF-1.4 binary")
-    out = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path)))
-    assert "_documents_not_searched" not in out
-
-
-def test_scan_is_bounded_and_never_raises(tmp_path):
-    assert _unsearched_documents(str(tmp_path / "does-not-exist")) == []
-    for i in range(15):
-        (tmp_path / f"doc{i}.pdf").write_bytes(b"%PDF")
-    assert len(_unsearched_documents(str(tmp_path))) == 10  # capped
-
-
-def test_hint_respects_file_glob(tmp_path):
-    """A search narrowed to source files must not point at excluded documents."""
-    (tmp_path / "notes.py").write_text("nothing relevant here")
-    (tmp_path / "tickets.pdf").write_bytes(b"%PDF-1.4 binary")
-
-    scoped = json.loads(search_tool(pattern="OATH", target="content",
-                                    path=str(tmp_path), file_glob="*.py"))
-    assert "_documents_not_searched" not in scoped
-
-    # A glob that selects documents is exactly when the blind spot bites.
-    on_docs = json.loads(search_tool(pattern="OATH", target="content",
-                                     path=str(tmp_path), file_glob="*.pdf"))
-    assert "tickets.pdf" in on_docs["_documents_not_searched"]
+    assert "document_matches" not in out

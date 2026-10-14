@@ -494,6 +494,28 @@ class SearchMixin:
             out.extend(["--glob", self._escape_shell_arg(f"!{item}/**")])
         return out
 
+    def list_documents(self, path: str, extensions: frozenset[str], limit: int) -> tuple[list[str], bool]:
+        """Files under ``path`` with one of ``extensions`` (case-insensitive), walked with
+        the content search's own ignore/hidden/protected-dir rules so document search
+        covers exactly the tree ``rg`` covered. Returns ``(paths, more_exist)``."""
+        names = sorted(ext.lstrip(".") for ext in extensions)
+        if self._has_command("rg"):
+            rg = self._quote_executable(self._resolve_command("rg") or "rg")
+            words = [rg, "--files", "--iglob", self._escape_shell_arg(f"*.{{{','.join(names)}}}"),
+                     *self._rg_exclusion_globs(path), "--", self._escape_native_tool_arg(path)]
+            result = self._run_rg_bounded(words, limit + 1, timeout=30)
+        elif self._has_command("find"):
+            root = self._escape_shell_arg(f"./{path}" if path.startswith("-") else path)
+            terms = " -o ".join(f"-iname {self._escape_shell_arg('*.' + name)}" for name in names)
+            result = self._exec(
+                f"find -H {root} {self._hidden_prune_expr([root])} -o -type f \\( {terms} \\) "
+                f"-print 2>/dev/null | head -n {limit + 1}", timeout=30)
+        else:
+            return [], False
+        files = [line for line in result.stdout.splitlines()
+                 if line and not line.startswith("[Command ")]
+        return files[:limit], len(files) > limit
+
     def _path_exists_probe(self, path: str) -> ExecuteResult:
         """Existence probe; stdout contains "exists" or "not_found" (or the probe's
         ``cwd_error`` when the exec wrapper itself failed)."""
