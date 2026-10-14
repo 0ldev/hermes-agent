@@ -36,10 +36,14 @@ def test_content_search_finds_document_text_at_read_file_line_numbers(tmp_path):
     single = json.loads(search_tool(pattern="OATH", target="content", path=str(doc)))
     assert "3: Notice of violation" in single["document_matches"]
 
-    # A search narrowed to source files never walks or reports documents.
+    # A search narrowed to source files never walks or reports documents, while a
+    # name-pinned document glob still reaches it.
     scoped = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path),
                                     file_glob="*.py"))
     assert not any(key.startswith(("document", "_documents")) for key in scoped)
+    pinned = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path),
+                                    file_glob="viol*.docx"))
+    assert "3: Notice of violation" in pinned["document_matches"]
 
 
 def test_documents_that_cannot_be_extracted_are_named_not_dropped(tmp_path):
