@@ -304,10 +304,9 @@ def _build_child_agent(
     child._delegate_depth, child._delegate_role = child_depth, effective_role  # post-degrade role
     child._subagent_id, child._parent_subagent_id = subagent_id, parent_subagent_id
     if str(context_mode).strip().lower() == "fork":
-        # Copy the live, already-compacted parent transcript without sharing nested
-        # tool-call/content objects with either agent.
-        from agent.turn_finalizer import _clone_background_review_messages
-        child._delegate_fork_history = _clone_background_review_messages(list(getattr(parent_agent, "_session_messages", None) or []))
+        # Snapshot NOW, on the dispatching thread: a background child never sees later parent messages.
+        from tools.delegate_tool_fork import build_fork_history
+        child._delegate_fork_history = build_fork_history(parent_agent)
     _apply_child_compression_cap(child, delegation_cfg)
     # Ownership chain for action=list/steer/stop; weakref so a finished parent
     # can be collected while a detached child record lingers in the registry.
@@ -553,7 +552,7 @@ def delegate_task(
         # Apply the top-level mode only after normalization so malformed task entries
         # still produce the structured validation error instead of crashing here.
         for task in task_list:
-            task["context_mode"] = context_mode
+            task.setdefault("context_mode", context_mode)  # a per-task mode wins over the call-wide one
     if not err:
         task_schemas, err = _coerce_task_schemas(task_list, output_schema)
     if not err:
@@ -724,8 +723,8 @@ DELEGATE_TASK_SCHEMA = {
                     "properties": {
                         "goal": _p(
                             "string",
-                            "What this subagent should accomplish. Be specific and self-contained — it knows "
-                            "nothing about your conversation history.",
+                            "What this subagent should accomplish. Be specific and self-contained — unless "
+                            "context_mode is 'fork', it knows nothing about your conversation history.",
                         ),
                         "context": _p(
                             "string",
@@ -734,8 +733,10 @@ DELEGATE_TASK_SCHEMA = {
                         ),
                         "context_mode": _p(
                             "string",
-                            "Optional context mode. Omit or use 'blank' for the current isolated-child behavior; use 'fork' "
-                            "to copy the parent's current conversation history into the child before its goal turn.",
+                            "'blank' (default): the child knows nothing of this conversation. 'fork': the child starts from "
+                            "this conversation as it stands now, so no re-briefing; use it for workers continuing your current "
+                            "work, keep 'blank' for independent tasks and for reviewers/verifiers who must not inherit your "
+                            "framing. A fork re-sends this transcript and costs accordingly.",
                             enum=["blank", "fork"],
                         ),
                         "output_schema": _p(
