@@ -83,6 +83,20 @@ def _cached_extract(data: bytes, path: str) -> tuple[str, str]:
     return entry
 
 
+def _host_rg() -> Optional[str]:
+    """The ripgrep this process can run: pm's pinned store copy first (nothing puts it
+    on PATH), then PATH."""
+    try:
+        from pm import installed_package
+
+        installed = installed_package("ripgrep")
+        if installed is not None and installed.binary:
+            return str(installed.binary)
+    except Exception:
+        logger.debug("pm ripgrep lookup failed", exc_info=True)
+    return shutil.which("rg")
+
+
 def _glob_can_select_documents(file_glob: Optional[str]) -> bool:
     """False only when ``file_glob`` pins a literal extension no document has (``*.py``),
     so a narrowed code search skips the document walk; the glob itself is applied by
@@ -236,7 +250,7 @@ def search_documents(file_ops: Any, path: str, pattern: str, file_glob: Optional
     docs = [d for d in candidates if admit(d)]
     if not docs:
         return _not_searched({}, more)
-    rg = shutil.which("rg")
+    rg = _host_rg()
     if rg is None:
         return _not_searched({d: "ripgrep is not installed on the Hermes host" for d in docs}, more)
 
