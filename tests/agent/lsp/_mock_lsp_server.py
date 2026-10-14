@@ -40,6 +40,9 @@ Behaviour (all behaviours selectable via env var ``MOCK_LSP_SCRIPT``):
   process and stdin alive.
 - ``"malformed_frame"`` — writes an invalid frame after ``didOpen``,
   then keeps the process and stdin alive.
+- ``"late_pull"`` — pyright-like: no pull capability at initialize, registers
+  ``textDocument/diagnostic`` dynamically 0.3 s after ``initialized`` (so the
+  registration lands mid-wait), never pushes, serves the pull.
 
 The script writes JSON-RPC framed messages to stdout and reads from
 stdin.  No third-party dependencies — uses only stdlib so it runs
@@ -52,6 +55,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -94,15 +98,20 @@ def _pull_mode():
 
 def _server_capabilities(script):
     caps = {"textDocumentSync": 2 if script == "incremental" else 1}
-    if _pull_mode() == "static":
+    if _pull_mode() == "static" and script != "late_pull":
         caps["diagnosticProvider"] = {"interFileDependencies": False, "workspaceDiagnostics": False}
     return caps
 
 
-def _register_dynamic_pull():
+def _register_dynamic_pull(script):
+    message = {"jsonrpc": "2.0", "id": "reg-1", "method": "client/registerCapability", "params": {
+        "registrations": [{"id": "pull", "method": "textDocument/diagnostic", "registerOptions": {}}]}}
     if _pull_mode() == "dynamic":
-        write_message({"jsonrpc": "2.0", "id": "reg-1", "method": "client/registerCapability", "params": {
-            "registrations": [{"id": "pull", "method": "textDocument/diagnostic", "registerOptions": {}}]}})
+        write_message(message)
+    elif script == "late_pull":
+        # Off-thread: the main loop only writes when answering requests, and the client sends none
+        # until pull is registered, so the frames cannot interleave.
+        threading.Timer(0.3, write_message, (message,)).start()
 
 
 def _rejects_pull(script):
@@ -184,7 +193,7 @@ def main():
             continue
 
         if msg.get("method") == "initialized":
-            _register_dynamic_pull()
+            _register_dynamic_pull(script)
             continue
 
         if msg.get("method") == "workspace/didChangeConfiguration":
@@ -243,9 +252,9 @@ def main():
                     "message": "synthetic error from mock-lsp",
                 }
             ]
-            if script == "silent":
-                # Never publishes diagnostics and the pull endpoint is
-                # rejected (below).  Models a slow server that only
+            if script in {"silent", "late_pull"}:
+                # Never publishes diagnostics; silent also rejects the pull
+                # endpoint (below).  Models a slow server that only
                 # re-reports after a didChange it never receives — the
                 # baseline snapshot has to wait out its full budget.
                 continue
