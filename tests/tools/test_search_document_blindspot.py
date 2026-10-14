@@ -13,7 +13,7 @@ from tools.file_tools import read_file_tool, search_tool
 
 def _docx(path, paragraphs):
     body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
-    with zipfile.ZipFile(path, "w") as z:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", (
             '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
             '<Default Extension="xml" ContentType="application/xml"/></Types>'))
@@ -31,6 +31,10 @@ def test_content_search_finds_document_text_at_read_file_line_numbers(tmp_path):
     assert f"{doc}\n  3: Notice of violation issued by OATH" in out["document_matches"]
     # The reported line is the line read_file shows for that path.
     assert "3|Notice of violation issued by OATH" in read_file_tool(path=str(doc), offset=3, limit=1)
+
+    # The document itself as the search root is searched the same way.
+    single = json.loads(search_tool(pattern="OATH", target="content", path=str(doc)))
+    assert "3: Notice of violation" in single["document_matches"]
 
     # A search narrowed to source files never walks or reports documents.
     scoped = json.loads(search_tool(pattern="OATH", target="content", path=str(tmp_path),
