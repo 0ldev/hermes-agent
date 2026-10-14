@@ -136,11 +136,11 @@ def test_user_ripgrep_config_cannot_change_search_results(tree, ops_factory, mon
     rc.write_text("--color=always\n--glob=!*.py\n--smart-case\n", encoding="utf-8")
     monkeypatch.setenv("RIPGREP_CONFIG_PATH", str(rc))
     monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
+    (tree / "d.txt").write_text("Needle five\n", encoding="utf-8")  # --smart-case would match it
     ops = ops_factory(tree, [])
     content = ops.search(pattern="needle", path=str(tree)).to_dict()
     assert content["total_count"] == 4, content
     assert {m["path"] for m in content["matches"]} == {
         str(tree / "a.py"), str(tree / "b.txt"), str(tree / "sub" / "c.py")}
-    assert ops.search(pattern="NEEDLE", path=str(tree)).to_dict()["total_count"] == 0  # case-sensitive
     files = ops.search(pattern="*.py", path=str(tree), target="files").to_dict()
     assert sorted(files["files"]) == [str(tree / "a.py"), str(tree / "sub" / "c.py")], files
