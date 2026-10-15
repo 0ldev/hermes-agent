@@ -34,7 +34,7 @@ jobs:
         shell: powershell
         run: |
           python --version
-          python proof/pr137951/dogfood.py ${{ matrix.side }} ${{ matrix.branch }} ${{ matrix.commit }}
+          python proof/pr137951/dogfood.py ${{ matrix.side }} ${{ matrix.branch }} ${{ matrix.commit }} leg7
           exit $LASTEXITCODE
 
       - name: Upload results and logs

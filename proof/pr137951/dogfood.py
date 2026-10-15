@@ -118,6 +118,17 @@ def launcher_script(exe):
         return f"<unreadable: {exc}>"
 
 
+def bin_snapshot():
+    """Each user-facing launcher in the real bin and the checkout its text names."""
+    snap = {}
+    for f in sorted(REAL_BIN.glob("hermes*")):
+        text = launcher_script(f) if f.suffix.lower() == ".exe" else f.read_text(encoding="utf-8", errors="replace")
+        snap[f.name] = {"names_review_tree": "rvw137951" in text,
+                        "names_install_tree": "hermes-agent" in text and "rvw137951" not in text,
+                        "text": text[:600]}
+    return snap
+
+
 def record(rec):
     RESULTS.append(rec)
     short = {k: rec.get(k) for k in ("side", "leg", "exit", "added", "removed", "fresh_console_hermes", "expose_cli")}
@@ -194,6 +205,15 @@ def main():
     # user to run `hermes pm repair`, so a sandbox does exactly that, then uses hermes, then runs the
     # update-time home steps.
     SANDBOX = [["pm", "repair"], ["--version"], POST_UPDATE]
+    only7 = len(sys.argv) > 4 and sys.argv[4] == "leg7"
+    if not only7:
+        legs_1_to_6(box, SANDBOX)
+    leg7(SANDBOX)
+    (T / "results.json").write_text(json.dumps(RESULTS, indent=2), encoding="utf-8")
+    return 0
+
+
+def legs_1_to_6(box, SANDBOX):
     # 1. A review sandbox: HERMES_HOME, LOCALAPPDATA and USERPROFILE all point at a throwaway box.
     record(leg("1_review_sandbox_all_overrides",
                {"HERMES_HOME": box / "hermes", "LOCALAPPDATA": box / "local", "USERPROFILE": box / "user"},
@@ -216,6 +236,7 @@ def main():
     record(leg("6_nested_sandbox_under_real_home", {"HERMES_HOME": nested}, SANDBOX,
                pre=remove_real_bin, roots=[REAL_HOME]))
 
+def leg7(SANDBOX):
     # 7. Follow-up class (finding 2): a second checkout of the same commit (a review tree) run with
     #    no HERMES_HOME rebinds the real bin\hermes.exe. Run its launcher script with the same Python.
     try:
@@ -235,17 +256,17 @@ def main():
             review_script = review_script.replace(old, new)
         launcher = T / "review_launcher.py"
         launcher.write_text(review_script, encoding="utf-8")
+        bin_before = bin_snapshot()
         rec = leg("7_review_checkout_vs_real_home", {"HERMES_HOME": None}, SANDBOX,
                   prefix=[python, str(launcher)], cwd=str(review), roots=[REAL_HOME])
         rec.update({"python": python, "script_rewritten_for_review": review_script != script_text,
                     "real_hermes_exe_bound_to_review_before": "rvw137951" in script_text,
-                    "real_hermes_exe_bound_to_review_after": "rvw137951" in launcher_script(EXE)})
+                    "real_hermes_exe_bound_to_review_after": "rvw137951" in launcher_script(EXE),
+                    "real_bin_before": bin_before, "real_bin_after": bin_snapshot()})
         record(rec)
     except Exception as exc:  # proof harness: report, never hide
         record({"side": SIDE, "leg": "7_review_checkout_vs_real_home", "exit": f"HARNESS ERROR {exc!r}"})
 
-    (T / "results.json").write_text(json.dumps(RESULTS, indent=2), encoding="utf-8")
-    return 0
 
 
 if __name__ == "__main__":
