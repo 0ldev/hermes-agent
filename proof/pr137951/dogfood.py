@@ -81,7 +81,8 @@ def run(cmd, env_over, log, timeout, cwd=None):
     # The step shell is PowerShell 7; its PSModulePath makes a Windows PowerShell 5 child
     # (install.ps1, any powershell.exe Hermes spawns) fail to load its own built-in cmdlets.
     # A user's console has no such leftover.
-    env.pop("PSModulePath", None)
+    for key in [k for k in env if k.upper() == "PSMODULEPATH"]:  # os.environ upper-cases names on Windows
+        env.pop(key)
     for k, v in env_over.items():
         if v is None:
             env.pop(k, None)

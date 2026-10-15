@@ -31,7 +31,7 @@ jobs:
 
       - name: Install Hermes as a user, then run the legs
         timeout-minutes: 65
-        shell: pwsh
+        shell: powershell
         run: |
           python --version
           python proof/pr137951/dogfood.py ${{ matrix.side }} ${{ matrix.branch }} ${{ matrix.commit }}
