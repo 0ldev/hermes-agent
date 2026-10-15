@@ -28,6 +28,14 @@ def test_new_file_that_copies_a_sibling_is_flagged_and_a_fresh_one_is_not(tmp_pa
     # An EXISTING target is an overwrite, not a new copy: never flagged here.
     assert find_near_duplicate(str(tmp_path / "utils.py"), copy) is None
 
+    # Credentials are never compared against or named, by file name or by folder.
+    for cred in ("server.key", "credentials.json"):
+        (tmp_path / cred).write_text(original, encoding="utf-8")
+        assert find_near_duplicate(str(tmp_path / ("copy_" + cred)), copy) is None, cred
+    (tmp_path / ".aws").mkdir()
+    (tmp_path / ".aws" / "config.py").write_text(original, encoding="utf-8")
+    assert find_near_duplicate(str(tmp_path / ".aws" / "config2.py"), copy) is None
+
 
 def test_write_file_result_carries_hint_only_for_local_env(tmp_path):
     from tools.file_tools import write_file_tool

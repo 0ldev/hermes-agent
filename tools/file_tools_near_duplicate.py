@@ -24,11 +24,25 @@ _SIZE_TOLERANCE = 0.35
 # Closest-size siblings actually read; bounds the I/O on a directory of hundreds of files.
 _MAX_CANDIDATES = 24
 _MIN_SIMILARITY = 0.85
+# Never read, compare against, or name a credential: "92% identical to server.key" is an oracle on
+# key material the model may not otherwise see. Folder and file-name match (Muse Code 1.4.5 fixed
+# its near-duplicate note naming .netrc the same way); Hermes's own read blocks apply on top.
+_CREDENTIAL_DIRS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker", ".password-store", "keychains"})
+_CREDENTIAL_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx", ".gpg", ".asc", ".ppk")
+_CREDENTIAL_NAME_PARTS = ("credential", "secret", "netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")
 
 
 def _is_local_env(file_ops) -> bool:
     from tools.environments.local import LocalEnvironment
     return isinstance(getattr(file_ops, "env", None), LocalEnvironment)
+
+
+def _is_credential_path(path: str) -> bool:
+    from agent.file_safety import get_read_block_error
+    from agent.redact import _is_secret_file_arg
+    name = os.path.basename(path).lower()
+    return (name.endswith(_CREDENTIAL_SUFFIXES) or any(part in name for part in _CREDENTIAL_NAME_PARTS)
+            or bool(get_read_block_error(path)) or _is_secret_file_arg(path))
 
 
 def find_near_duplicate(resolved: str, new_content: str) -> tuple[str, float, int] | None:
@@ -42,6 +56,8 @@ def find_near_duplicate(resolved: str, new_content: str) -> tuple[str, float, in
     directory, name = os.path.split(resolved)
     ext = os.path.splitext(name)[1]
     if not ext:  # extensionless siblings (Makefile, LICENSE, Dockerfile) rarely mean a copy
+        return None
+    if {part.lower() for part in os.path.normpath(directory).split(os.sep)} & _CREDENTIAL_DIRS:
         return None
     approx_size = len(new_content.encode("utf-8", errors="replace"))
     low, high = approx_size * (1 - _SIZE_TOLERANCE), approx_size * (1 + _SIZE_TOLERANCE)
@@ -57,7 +73,7 @@ def find_near_duplicate(resolved: str, new_content: str) -> tuple[str, float, in
                     size = entry.stat(follow_symlinks=False).st_size
                 except OSError:
                     continue
-                if low <= size <= high:
+                if low <= size <= high and not _is_credential_path(entry.path):
                     candidates.append((abs(size - approx_size), entry.path))
     except OSError:
         return None
@@ -88,7 +104,7 @@ def near_duplicate_hint(file_ops, resolved: str | None, new_content: str) -> str
         return None
     try:
         match = find_near_duplicate(resolved, new_content)
-    except Exception:
+    except (OSError, ValueError, RuntimeError):  # advisory: a path or I/O failure never blocks the write
         return None
     if not match:
         return None
