@@ -1,0 +1,47 @@
+# TEMPORARY live dogfood for PR #137951. Lives only on proof/pr137951-user-path; never merges.
+name: PR 137951 User PATH dogfood
+
+on:
+  push:
+    branches: ['proof/pr137951-user-path']
+
+permissions:
+  contents: read
+
+jobs:
+  dogfood:
+    name: dogfood (${{ matrix.side }})
+    runs-on: windows-latest-32-core
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - side: base
+            branch: main
+            commit: ca069e12239a2c8d13887ac9f983557d00bdcfd2
+          - side: head
+            branch: fix/windows-user-path-sandbox-home
+            commit: bab74d3fc4687eb9dd8d10f5804ac8f763f40a38
+    steps:
+      - name: Checkout proof driver
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          sparse-checkout: proof/pr137951
+
+      - name: Install Hermes as a user, then run the legs
+        timeout-minutes: 65
+        shell: pwsh
+        run: |
+          python --version
+          python proof/pr137951/dogfood.py ${{ matrix.side }} ${{ matrix.branch }} ${{ matrix.commit }}
+          exit $LASTEXITCODE
+
+      - name: Upload results and logs
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dogfood-${{ matrix.side }}
+          path: ${{ runner.temp }}/p137951/${{ matrix.side }}
+          if-no-files-found: warn
