@@ -21,7 +21,8 @@ def build_doctor_parser(subparsers, *, cmd_doctor: Callable) -> None:
         "--turn", action="store_true",
         help="Opt-in: run one real agent turn on the configured main model "
             "(fallback off, only the todo tool) and report whether it answers "
-            "and completes a tool round trip. Spends one small model call.")
+            "and completes a tool round trip. Makes a few small model requests "
+            "(about 2-4, at most 6).")
     doctor_parser.add_argument(
         "--ack", metavar="ADVISORY_ID", default=None,
         help="Acknowledge a security advisory by ID and exit. After ack, the "

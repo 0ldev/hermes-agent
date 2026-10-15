@@ -981,7 +981,7 @@ hermes doctor [--fix] [--live] [--turn]
 |--------|-------------|
 | `--fix` | Attempt automatic repairs where possible. |
 | `--live` | Opt-in: one bounded, read-only real call per configured tool backend (Firecrawl, FAL, browser, MCP servers, TTS/STT). |
-| `--turn` | Opt-in: run one real agent turn on the configured main model and report whether it answers and completes a tool call. Spends one small model call. |
+| `--turn` | Opt-in: run one real agent turn on the configured main model and report whether it answers and completes a tool call. Makes a few small model requests (about 2-4, at most 6). |
 
 `--turn` resolves the main model exactly like `hermes -z` does, but with the fallback chain switched off (a healthy fallback would hide a broken primary), only the `todo` tool exposed, and no session saved. It catches what the `/models` connectivity checks cannot: a model slug the provider does not serve, an account without access to the model, a wrong API mode, or a model that answers but never calls tools (reported as a warning). The row shows provider, model, API mode, wall time and token counts.
 

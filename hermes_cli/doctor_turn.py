@@ -5,7 +5,8 @@ a completion. A route can pass all of them and still fail every chat: a model sl
 not serve, an entitlement the account lacks, the wrong ``api_mode``, or a model that cannot call tools.
 This check runs ONE real turn through the same runtime resolution ``hermes -z`` uses, with fallback
 off (a healthy fallback would hide a dead primary), only the ``todo`` tool exposed, and no session
-row written. It spends one small model call, so it runs only when the user passes ``--turn``.
+row written. One short turn is a few small model requests (about 2-4, capped at 6 iterations), so it
+runs only when the user passes ``--turn``.
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ def _build_agent():
 
 def run_turn_check(issues: list[str]) -> str:
     """Run the turn and report one row; returns ``pass`` / ``warn`` / ``fail``."""
-    _section("End-to-End Turn (opt-in, one real model call)")
+    _section("End-to-End Turn (opt-in, a few real model requests)")
     agent = None
     started = time.monotonic()
     try:
