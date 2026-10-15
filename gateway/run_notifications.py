@@ -891,7 +891,9 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
             else:
                 await admit_internal_event(adapter, synth_event)
             return True
-        except WakeNotAccepted:
+        except WakeNotAccepted as exc:
+            logger.warning("Watch notification not admitted for %s chat=%s: %s",
+                           platform_name, source.chat_id, exc)
             # Durable callers refund the claim; ordinary watch callers just requeue.
             if raise_not_accepted:
                 raise
@@ -1688,8 +1690,9 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                       session_id, interval, notify_mode, agent_notify)
         silent = notify_mode == "off" and not agent_notify
         last_output_len = 0
+        tick = interval
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(tick)
             session = process_registry.get(session_id)
             if session is None:
                 break
@@ -1725,7 +1728,8 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                     delivered = await self._enqueue_process_completion_notification(synth_text, completion_evt)
                     if delivered is False:
                         # The process remains terminal; retry after failed adapter injection instead
-                        # of suppressing the result.
+                        # of suppressing the result, backing off so a refusal cannot spin (#138940).
+                        tick = min(max(tick, 1) * 2, 60)
                         continue
                     # The agent normally reports the result itself, so the chat gets no separate receipt.
                     # While the launching turn is still running the injection only queues a follow-up, and

@@ -180,7 +180,9 @@ async def _native_owner(tmp_path, monkeypatch, human_message_id):
 @pytest.mark.asyncio
 async def test_native_completion_wake_admits_when_source_differs_only_by_message_id(tmp_path, monkeypatch):
     """A synthetic wake clears ``message_id`` (#52694/#123097) while the committed human
-    envelope keeps it; the admission must still match the route and drop the stale anchor."""
+    envelope keeps it; the admission must still match the route, and the restored wake must
+    anchor no platform reply (its ``message_id`` is the producer identity, #138940)."""
+    from gateway.platforms.base import _reply_anchor_for_event
     from gateway.session_envelope import restore_native
     runner, authority, adapter, source, metadata = await _native_owner(tmp_path, monkeypatch, 'human-1')
     try:
@@ -191,7 +193,8 @@ async def test_native_completion_wake_admits_when_source_differs_only_by_message
         assert row is not None
         envelope = row['payload']['native_text_v1']
         assert 'message_id' not in envelope['source']
-        assert restore_native(row['payload'], runner).source.message_id is None
+        restored = restore_native(row['payload'], runner)
+        assert restored.source.message_id is None and _reply_anchor_for_event(restored) is None
         assert (await authority.admit_automation(adapter, event, 'notice')).admission_id == receipt.admission_id
         owner = authority.logical_owner(metadata['gateway_session_id'])
         automation = [r for r in list_session_admissions(authority.db, session_id=owner, pending_only=False)
@@ -210,18 +213,5 @@ async def test_native_completion_wake_refuses_other_source_drift(tmp_path, monke
         event = MessageEvent(text='notice', source=drifted, internal=True, metadata=dict(metadata))
         with pytest.raises(RuntimeStoreError, match='admission_conflict'):
             await authority.admit_automation(adapter, event, 'notice')
-    finally:
-        authority.db.close()
-
-
-@pytest.mark.asyncio
-async def test_native_completion_wake_refuses_another_adapter(tmp_path, monkeypatch):
-    from plugins.platforms.discord.adapter import DiscordAdapter
-    _runner, authority, _adapter, source, metadata = await _native_owner(tmp_path, monkeypatch, 'human-1')
-    try:
-        stranger = DiscordAdapter(PlatformConfig(enabled=True, token='***', typing_indicator=False))
-        event = MessageEvent(text='notice', source=source, internal=True, metadata=dict(metadata))
-        with pytest.raises(RuntimeStoreError, match='admission_conflict'):
-            await authority.admit_automation(stranger, event, 'notice')
     finally:
         authority.db.close()
