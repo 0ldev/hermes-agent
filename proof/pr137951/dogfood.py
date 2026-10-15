@@ -29,6 +29,7 @@ REAL_HOME = REAL_LOCAL / "hermes"
 REAL_BIN = REAL_HOME / "bin"
 EXE = REAL_BIN / "hermes.exe"
 RESULTS: list[dict] = []
+POST_UPDATE = ["--run-module", "hermes_cli.post_update", "--scope", "home"]
 ENV_KEY = "Environment"
 
 
@@ -129,15 +130,18 @@ def remove_real_bin():
     write_user("Path", (";".join(keep), value[1]))
 
 
-def leg(name, env_over, argv, pre=None, roots=(), cmd=None, cwd=None):
+def leg(name, env_over, argvs, pre=None, roots=(), prefix=None, cwd=None):
     saved_path, saved_home = read_user("Path"), read_user("HERMES_HOME")
     try:
         if pre:
             pre()
         before = read_user("Path")
         start = time.time() - 1
-        log = LOGS / f"{name}.log"
-        rc = run(cmd or [str(EXE), *argv], env_over, log, 900, cwd=cwd)
+        rc, tails = [], []
+        for i, argv in enumerate(argvs):
+            log = LOGS / f"{name}.{i}.log"
+            rc.append(run([*(prefix or [str(EXE)]), *argv], env_over, log, 1200, cwd=cwd))
+            tails.append([" ".join(argv)] + tail(log, 8))
         after = read_user("Path")
         before_n = {norm(e) for e in entries(before)}
         after_n = {norm(e) for e in entries(after)}
@@ -147,7 +151,7 @@ def leg(name, env_over, argv, pre=None, roots=(), cmd=None, cwd=None):
             "removed": [e for e in entries(before) if norm(e) not in after_n],
             "fresh_console_hermes": fresh_console_hermes(),
             "expose_cli": bootstrap_records(roots, start),
-            "log_tail": tail(log),
+            "log_tail": tails,
         }
         return rec
     finally:
@@ -186,27 +190,30 @@ def main():
     for sub in ("hermes", "local", "user"):
         (box / sub).mkdir(parents=True, exist_ok=True)
 
+    # A throwaway home cannot launch until it has its own dependency environment; Hermes tells the
+    # user to run `hermes pm repair`, so a sandbox does exactly that, then uses hermes, then runs the
+    # update-time home steps.
+    SANDBOX = [["pm", "repair"], ["--version"], POST_UPDATE]
     # 1. A review sandbox: HERMES_HOME, LOCALAPPDATA and USERPROFILE all point at a throwaway box.
     record(leg("1_review_sandbox_all_overrides",
                {"HERMES_HOME": box / "hermes", "LOCALAPPDATA": box / "local", "USERPROFILE": box / "user"},
-               ["--version"], roots=[box / "hermes"]))
+               SANDBOX, roots=[box / "hermes"]))
     # 2. A test run / lab run: only HERMES_HOME points at a temp dir.
-    record(leg("2_temp_hermes_home_only", {"HERMES_HOME": T / "box2"}, ["--version"], roots=[T / "box2"]))
-    # 3. A named profile of the real home must still repair the real entry.
+    record(leg("2_temp_hermes_home_only", {"HERMES_HOME": T / "box2"}, SANDBOX, roots=[T / "box2"]))
+    # 3. A named profile of the real home still repairs the real entry on update.
     (REAL_HOME / "profiles" / "work").mkdir(parents=True, exist_ok=True)
-    record(leg("3_profile_of_real_home", {"HERMES_HOME": REAL_HOME / "profiles" / "work"}, ["--version"],
-               pre=remove_real_bin, roots=[REAL_HOME]))
+    record(leg("3_profile_of_real_home", {"HERMES_HOME": REAL_HOME / "profiles" / "work"},
+               [["--version"], POST_UPDATE], pre=remove_real_bin, roots=[REAL_HOME]))
     # 4. The update-time home steps for the real home re-add a missing entry.
-    record(leg("4_real_home_post_update", {"HERMES_HOME": None},
-               ["--run-module", "hermes_cli.post_update", "--scope", "home"], pre=remove_real_bin))
+    record(leg("4_real_home_post_update", {"HERMES_HOME": None}, [POST_UPDATE], pre=remove_real_bin))
     # 5. A custom home stored as a user variable owns the PATH.
     custom = T / "custom"
-    record(leg("5_stored_custom_home", {"HERMES_HOME": custom}, ["--version"],
+    record(leg("5_stored_custom_home", {"HERMES_HOME": custom}, SANDBOX,
                pre=lambda: write_user("HERMES_HOME", (str(custom), winreg.REG_SZ)), roots=[custom]))
     # 6. A sandbox nested inside the real home (the reviewer's P1.1).
     nested = REAL_HOME / "cache" / "scratch" / "box3"
     nested.mkdir(parents=True, exist_ok=True)
-    record(leg("6_nested_sandbox_under_real_home", {"HERMES_HOME": nested}, ["--version"],
+    record(leg("6_nested_sandbox_under_real_home", {"HERMES_HOME": nested}, SANDBOX,
                pre=remove_real_bin, roots=[REAL_HOME]))
 
     # 7. Follow-up class (finding 2): a second checkout of the same commit (a review tree) run with
@@ -217,9 +224,9 @@ def main():
                         str(review), "HEAD"], check=True, capture_output=True)
         script_text = launcher_script(EXE)
         install_root = str((REAL_HOME / "hermes-agent").resolve())
-        exe_bytes = EXE.read_bytes()
-        m = re.search(rb'#!"?([A-Za-z]:\\[^\r\n"]+?pythonw?\.exe)', exe_bytes)
+        m = re.search(rb'#!"?([A-Za-z]:\\[^\r\n"]+?pythonw?\.exe)', EXE.read_bytes())
         python = m.group(1).decode() if m else None
+
         def esc(s):
             return s.encode("unicode_escape").decode("ascii")
 
@@ -228,13 +235,11 @@ def main():
             review_script = review_script.replace(old, new)
         launcher = T / "review_launcher.py"
         launcher.write_text(review_script, encoding="utf-8")
-        before_bound = "rvw137951" in script_text
-        rec = leg("7_review_checkout_vs_real_home", {"HERMES_HOME": None}, [],
-                  cmd=[python, str(launcher), "--version"], cwd=str(review), roots=[REAL_HOME])
-        after_text = launcher_script(EXE)
+        rec = leg("7_review_checkout_vs_real_home", {"HERMES_HOME": None}, SANDBOX,
+                  prefix=[python, str(launcher)], cwd=str(review), roots=[REAL_HOME])
         rec.update({"python": python, "script_rewritten_for_review": review_script != script_text,
-                    "real_hermes_exe_bound_to_review_before": before_bound,
-                    "real_hermes_exe_bound_to_review_after": "rvw137951" in after_text})
+                    "real_hermes_exe_bound_to_review_before": "rvw137951" in script_text,
+                    "real_hermes_exe_bound_to_review_after": "rvw137951" in launcher_script(EXE)})
         record(rec)
     except Exception as exc:  # proof harness: report, never hide
         record({"side": SIDE, "leg": "7_review_checkout_vs_real_home", "exit": f"HARNESS ERROR {exc!r}"})

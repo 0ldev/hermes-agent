@@ -21,7 +21,7 @@ jobs:
             branch: main
             commit: ca069e12239a2c8d13887ac9f983557d00bdcfd2
           - side: head
-            branch: fix/windows-user-path-sandbox-home
+            branch: proof/pr137951-head
             commit: bab74d3fc4687eb9dd8d10f5804ac8f763f40a38
     steps:
       - name: Checkout proof driver
