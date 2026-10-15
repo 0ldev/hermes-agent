@@ -78,6 +78,10 @@ def tail(path, n=12):
 
 def run(cmd, env_over, log, timeout, cwd=None):
     env = os.environ.copy()
+    # The step shell is PowerShell 7; its PSModulePath makes a Windows PowerShell 5 child
+    # (install.ps1, any powershell.exe Hermes spawns) fail to load its own built-in cmdlets.
+    # A user's console has no such leftover.
+    env.pop("PSModulePath", None)
     for k, v in env_over.items():
         if v is None:
             env.pop(k, None)
