@@ -399,8 +399,13 @@ def apply_config_bootstrap_env(remote_names, home: Path | None = None, project_e
     selected and authenticated from the same deployment either way. A file deployment gets only its
     selector (the file backend needs nothing else before boot); values the process env holds and
     no file defines are left alone; ``load_hermes_dotenv`` later publishes the same values."""
+    from agent.safe_worker_policy import worker_config_snapshot
     from hermes_cli.config_backend import BACKEND_ENV
 
+    # A frozen-policy worker reads no profile file, ``.env`` included (as ``load_hermes_dotenv``):
+    # its config is the bound snapshot, so there is no backend deployment to publish.
+    if worker_config_snapshot() is not None:
+        return
     with _DOTENV_LOCK:
         # Resolved and published like the dotenv loader's own pass, so the loader's later pass (and
         # every reload) peels these values back and expands ``${VAR}`` exactly once.
@@ -581,10 +586,9 @@ def load_hermes_dotenv(
     # remote backend fetches this home's config here, failing closed; the file backend does nothing.
     from hermes_cli.config_backend import get_config_backend
 
-    # The administrator-managed .env is part of the deployment the backend boots from (it may be
-    # where the selector, plane URL or instance id live), so it applies before the boot as well as
-    # last below, where it keeps its precedence over secret-source results.
-    _apply_managed_env(load_pass=load_pass)
+    # The administrator-managed .env's deployment names (selector, plane URL, instance id) were
+    # published by ``bootstrap_deployment`` above; the whole managed .env applies once, last below,
+    # where it keeps its precedence over secret-source results.
     get_config_backend().boot(home_path)
 
     # External sources are skipped for the updater (dotenv + managed env still load): ``update`` must not
