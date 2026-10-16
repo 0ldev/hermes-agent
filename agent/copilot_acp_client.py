@@ -427,7 +427,9 @@ class CopilotACPClient:
                 try:
                     msg = inbox.get(timeout=0.1)
                 except queue.Empty:
-                    if exit_deadline is not None and not stdout_pump.is_alive():
+                    # Check the queue only after seeing the pump finish: its last put can land
+                    # between this get's timeout and is_alive(), so a dead pump alone is not EOF.
+                    if exit_deadline is not None and not stdout_pump.is_alive() and inbox.empty():
                         break
                     continue
                 if self._handle_server_message(

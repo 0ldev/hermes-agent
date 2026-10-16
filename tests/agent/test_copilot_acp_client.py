@@ -507,6 +507,56 @@ def test_replies_written_before_exit_are_read_not_reported_as_early_exit(tmp_pat
     assert client.list_models(timeout_seconds=30) == ["gpt-5.6-sol"]
 
 
+_REPLY_THEN_EXIT_ACP_CLI = """
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if request["method"] == "initialize":
+        result = {"protocolVersion": 1}
+    else:
+        result = {"sessionId": "s", "configOptions": [{"id": "model", "options": [{"value": "gpt-5.6-sol"}]}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+    if request["method"] == "session/new":
+        sys.exit(0)
+"""
+
+
+def test_final_reply_queued_as_the_pump_finishes_is_still_read(tmp_path, monkeypatch):
+    """The pump's last put can land between a get() timeout and the pump's death; the dead pump
+    alone must not end the read while that reply sits in the queue."""
+    import queue as queue_module
+    import threading
+
+    from agent import copilot_acp_client
+    from tests.waiting import wait_until
+
+    real_queue = queue_module.Queue
+    held_back = []
+
+    class _GetTimesOutAsTheReplyLands(real_queue):
+        def get(self, block=True, timeout=None):
+            msg = super().get(block, timeout)
+            # Report the final reply as a timeout twice, leaving it queued: the first after the CLI
+            # exited and every pump finished, the second once the exit is seen, i.e. the moment the
+            # race decides.
+            if len(held_back) < 2 and "sessionId" in str(msg.get("result")):
+                with self.mutex:
+                    self.queue.appendleft(msg)
+                wait_until(lambda: not any(t.name.endswith("(_pump)") for t in threading.enumerate()),
+                           what="ACP pump threads to finish")
+                held_back.append(True)
+                raise queue_module.Empty
+            return msg
+
+    monkeypatch.setattr(copilot_acp_client.queue, "Queue", _GetTimesOutAsTheReplyLands)
+    server = tmp_path / "reply_then_exit_acp.py"
+    server.write_text(_REPLY_THEN_EXIT_ACP_CLI, encoding="utf-8")
+    client = CopilotACPClient(command=sys.executable, args=[str(server)], acp_cwd=str(tmp_path))
+
+    assert client.list_models(timeout_seconds=30) == ["gpt-5.6-sol"]
+    assert len(held_back) == 2
+
+
 # --- concurrent sessions on a shared client ---------------------------------
 #
 # Aux clients are cached per provider config and served to every concurrent
