@@ -4,7 +4,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import simpleGit from 'simple-git'
 import { afterEach, test, vi } from 'vitest'
 
 import {
@@ -14,7 +13,7 @@ import {
   REVIEW_FILE_CAP,
   reviewCreatePr,
   reviewList,
-  SIMPLE_GIT_UNSAFE_BINARY_WARN
+  simpleGitHostEnv
 } from './git-review-ops'
 import type * as NoConsoleGit from './no-console-git'
 
@@ -97,37 +96,67 @@ test('gitFor accepts a Windows no-console host tuple with restricted characters'
   }
 })
 
-test('gitFor suppresses only the known custom-binary warning and restores console.warn', () => {
-  const spacedBin = String.raw`C:\Program Files\Git\cmd\git.exe`
-  // `windowsGitHost()` resolves nothing in this process (no configured roots, no
-  // HERMES_DESKTOP_PYTHON), so `gitBin` itself is what simple-git validates — the
-  // spaced `Program Files` path, which warns once per factory call.
-  const warnings: unknown[][] = []
-  const originalWarn = console.warn
+test('simpleGitHostEnv drops inherited guarded vars but keeps our own', () => {
+  const env = simpleGitHostEnv(
+    { PATH: '/bin', GIT_PAGER: 'cat', git_dir: '/x', EDITOR: 'vim', VISUAL: 'code', GIT_TERMINAL_PROMPT: '1' },
+    'git'
+  )
 
-  const recordingWarn = (...args: unknown[]) => {
-    warnings.push(args)
+  assert.deepEqual(env, { PATH: '/bin', HERMES_GIT_ARGV0: '"git"', GIT_TERMINAL_PROMPT: '1' })
+})
+
+test('gitFor runs git through the no-console host tuple with guarded vars in process.env', async () => {
+  // simple-git 4 throws when an explicitly supplied env carries a guarded key
+  // (GIT_*, EDITOR, ...) not in `allowEnvironment`. The Windows host tuple is the
+  // only path that supplies an explicit env, so drive it for real here with the
+  // python running the host script and guarded vars present in process.env.
+  const pythonBin = ['python3', 'python'].find(bin => {
+    try {
+      execFileSync(bin, ['--version'], { stdio: 'ignore' })
+
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  if (!pythonBin) {
+    return
   }
 
-  console.warn = recordingWarn
+  const dir = makeRepo()
+  const actualNoConsole = await vi.importActual<typeof NoConsoleGit>('./no-console-git')
+
+  const scriptPath = actualNoConsole.ensureNoConsoleGitScript(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-git-host-'))
+  )
+
+  tempDirs.push(path.dirname(scriptPath))
+  vi.resetModules()
+  vi.doMock('./no-console-git', async importOriginal => ({
+    ...(await importOriginal<typeof NoConsoleGit>()),
+    windowsGitHost: () => ({ isWindows: true, pythonBin, scriptPath })
+  }))
+  vi.stubEnv('GIT_PAGER', 'cat')
+  vi.stubEnv('EDITOR', 'vi')
 
   try {
-    for (let i = 0; i < 5; i += 1) {
-      gitFor(process.cwd(), spacedBin)
-    }
+    const { repoStatus: repoStatusWithHostTuple } = await import('./git-review-ops')
 
-    assert.equal(console.warn, recordingWarn)
+    fs.writeFileSync(path.join(dir, 'tracked.txt'), 'changed\n')
 
-    // The escape hatch used directly still warns: the message gitFor filters is a
-    // live emission of the installed simple-git, so the filter cannot go stale
-    // silently (an upgrade that rewords it fails this test, not production).
-    simpleGit({ baseDir: process.cwd(), binary: spacedBin, unsafe: { allowUnsafeCustomBinary: true } })
-    console.warn('unrelated warning')
+    const status = await repoStatusWithHostTuple(dir, 'git')
+
+    assert.ok(status)
+    assert.deepEqual(
+      status.files.map(file => file.path),
+      ['tracked.txt']
+    )
   } finally {
-    console.warn = originalWarn
+    vi.unstubAllEnvs()
+    vi.doUnmock('./no-console-git')
+    vi.resetModules()
   }
-
-  assert.deepEqual(warnings, [[SIMPLE_GIT_UNSAFE_BINARY_WARN], ['unrelated warning']])
 })
 
 test('resolveRenamePath: simple rename resolves to the new path', () => {
