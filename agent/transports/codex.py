@@ -416,6 +416,21 @@ def _codex_efforts_for_route(model: Any, base_url: Any, *, is_codex_backend: boo
     return codex_supported_efforts(str(model or ""))
 
 
+def _marker_pinned_effort(marker_baseline: Optional[str], reasoning_enabled: bool) -> Optional[str]:
+    """Session baseline effort the request must keep while markers carry the current effort."""
+    return marker_baseline if marker_baseline is not None and reasoning_enabled else None
+
+
+def _pin_reasoning_effort(kwargs: dict[str, Any], pinned_effort: Optional[str]) -> None:
+    """Re-pin ``reasoning.effort`` after request_overrides so the cached prefix's effort survives."""
+    if pinned_effort is None:
+        return
+    reasoning = kwargs.get("reasoning")
+    if not isinstance(reasoning, dict):
+        reasoning = kwargs["reasoning"] = {}
+    reasoning["effort"] = pinned_effort
+
+
 def _prepare_reasoning_effort_updates(
     messages: list[dict[str, Any]], model: str, params: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], Optional[str], bool]:
@@ -815,8 +830,8 @@ class ResponsesApiTransport(ProviderTransport):
         native_compaction_active = _native_compaction_active(context_management)
 
         reasoning_effort, reasoning_enabled = _resolve_reasoning(model, params)
-        if marker_baseline is not None and reasoning_enabled:
-            reasoning_effort = marker_baseline
+        pinned_effort = _marker_pinned_effort(marker_baseline, reasoning_enabled)
+        reasoning_effort = pinned_effort or reasoning_effort
         response_tools, self._last_wire_aliases = _alias_wire_tools(
             self.convert_tools(tools), params, is_xai_responses, is_codex_backend,
         )
@@ -876,12 +891,7 @@ class ResponsesApiTransport(ProviderTransport):
         if request_overrides:
             kwargs.update(request_overrides)
             kwargs["model"] = wire_model
-        if marker_baseline is not None and reasoning_enabled:
-            reasoning = kwargs.get("reasoning")
-            if not isinstance(reasoning, dict):
-                reasoning = {}
-                kwargs["reasoning"] = reasoning
-            reasoning["effort"] = marker_baseline
+        _pin_reasoning_effort(kwargs, pinned_effort)
 
         # ``prompt_cache_options`` is not a Responses.create() kwarg in the OpenAI SDK, so a
         # top-level copy (e.g. from request_overrides) fails the call with TypeError before any
