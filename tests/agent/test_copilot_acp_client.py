@@ -479,34 +479,6 @@ print(json.dumps({{"jsonrpc": "2.0", "id": session["id"], "result": {{"sessionId
     assert client.list_models(timeout_seconds=30) == ["gpt-5.6-sol"]
 
 
-_REPLY_AFTER_EXIT_ACP_CLI = """
-import subprocess, sys
-# A straggler inherits the pipes and answers after this process has exited, so poll() reports
-# the exit before the client has read a single reply.
-subprocess.Popen([sys.executable, "-c", '''
-import json, sys, time
-time.sleep(0.3)
-for line in sys.stdin:
-    request = json.loads(line)
-    if request["method"] == "initialize":
-        result = {"protocolVersion": 1}
-    else:
-        result = {"sessionId": "s", "configOptions": [{"id": "model", "options": [{"value": "gpt-5.6-sol"}]}]}
-    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
-'''])
-sys.exit(0)
-"""
-
-
-def test_replies_written_before_exit_are_read_not_reported_as_early_exit(tmp_path):
-    """Seeing the CLI exit must not discard replies still in the stdout pipe."""
-    server = tmp_path / "reply_after_exit_acp.py"
-    server.write_text(_REPLY_AFTER_EXIT_ACP_CLI, encoding="utf-8")
-    client = CopilotACPClient(command=sys.executable, args=[str(server)], acp_cwd=str(tmp_path))
-
-    assert client.list_models(timeout_seconds=30) == ["gpt-5.6-sol"]
-
-
 _REPLY_THEN_EXIT_ACP_CLI = """
 import json, sys
 for line in sys.stdin:
@@ -521,40 +493,50 @@ for line in sys.stdin:
 """
 
 
-def test_final_reply_queued_as_the_pump_finishes_is_still_read(tmp_path, monkeypatch):
-    """The pump's last put can land between a get() timeout and the pump's death; the dead pump
-    alone must not end the read while that reply sits in the queue."""
+def _list_models_reading_the_final_reply_late(tmp_path, monkeypatch, *, timeouts: int) -> list[str]:
+    """Run a write-then-exit CLI, holding its final reply back from the client until the CLI has
+    exited and every pump reached EOF; each hold reports one ``get()`` timeout with the reply
+    still queued, the way a slow reader meets it."""
     import queue as queue_module
     import threading
 
     from agent import copilot_acp_client
     from tests.waiting import wait_until
 
-    real_queue = queue_module.Queue
     held_back = []
 
-    class _GetTimesOutAsTheReplyLands(real_queue):
+    class _ReplyReadAfterExit(queue_module.Queue):
         def get(self, block=True, timeout=None):
             msg = super().get(block, timeout)
-            # Report the final reply as a timeout twice, leaving it queued: the first after the CLI
-            # exited and every pump finished, the second once the exit is seen, i.e. the moment the
-            # race decides.
-            if len(held_back) < 2 and "sessionId" in str(msg.get("result")):
+            if len(held_back) < timeouts and "sessionId" in str(msg.get("result")):
                 with self.mutex:
                     self.queue.appendleft(msg)
-                wait_until(lambda: not any(t.name.endswith("(_pump)") for t in threading.enumerate()),
-                           what="ACP pump threads to finish")
+                wait_until(lambda: all(p.poll() is not None for p in client._active_processes)
+                           and not any(t.name.endswith("(_pump)") for t in threading.enumerate()),
+                           what="the ACP CLI to exit and its pumps to reach EOF")
                 held_back.append(True)
                 raise queue_module.Empty
             return msg
 
-    monkeypatch.setattr(copilot_acp_client.queue, "Queue", _GetTimesOutAsTheReplyLands)
+    monkeypatch.setattr(copilot_acp_client.queue, "Queue", _ReplyReadAfterExit)
     server = tmp_path / "reply_then_exit_acp.py"
     server.write_text(_REPLY_THEN_EXIT_ACP_CLI, encoding="utf-8")
     client = CopilotACPClient(command=sys.executable, args=[str(server)], acp_cwd=str(tmp_path))
+    models = client.list_models(timeout_seconds=30)
+    assert len(held_back) == timeouts
+    return models
 
-    assert client.list_models(timeout_seconds=30) == ["gpt-5.6-sol"]
-    assert len(held_back) == 2
+
+def test_final_reply_written_before_exit_is_read_not_reported_as_early_exit(tmp_path, monkeypatch):
+    """The CLI writes its final reply and exits, and the pump reaches EOF, all before the client
+    reads that reply: seeing the exit must not discard it."""
+    assert _list_models_reading_the_final_reply_late(tmp_path, monkeypatch, timeouts=1) == ["gpt-5.6-sol"]
+
+
+def test_final_reply_queued_as_the_pump_finishes_is_still_read(tmp_path, monkeypatch):
+    """The pump's last put can land between a get() timeout and the pump's death; the dead pump
+    alone must not end the read while that reply sits in the queue."""
+    assert _list_models_reading_the_final_reply_late(tmp_path, monkeypatch, timeouts=2) == ["gpt-5.6-sol"]
 
 
 _CRASH_WITH_FILE_REQUEST_QUEUED_ACP_CLI = """
