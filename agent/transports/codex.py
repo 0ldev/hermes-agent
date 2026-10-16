@@ -465,7 +465,8 @@ def _prepare_reasoning_effort_updates(
             not bool(normalized.get("reset")) and normalized["effort"] != normalized["previous"]
         )
         prepared.append({**message, EFFORT_UPDATE_KEY: normalized})
-    return prepared, clamp_effort(baseline, supported), has_wire_updates
+    # Pin only while a real switch rides in band; otherwise request_overrides keep the last word.
+    return prepared, (clamp_effort(baseline, supported) if has_wire_updates else None), has_wire_updates
 
 
 def _sanitize_astra_request_kwargs(kwargs: dict[str, Any], model: Any, base_url: Any) -> None:

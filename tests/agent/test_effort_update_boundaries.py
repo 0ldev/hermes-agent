@@ -65,3 +65,38 @@ def test_sol_effort_updates_preserve_baseline_through_sqlite_resume(tmp_path):
     assert second['input'][:len(first['input'])] == first['input']
     assert second['input'][-2] == {'type': 'configuration_update', 'reasoning': {'effort': 'low'}}
     db.close()
+
+
+def test_explicit_effort_override_wins_without_an_in_band_switch():
+    # No marker in history: request_overrides must keep the last word on reasoning.effort.
+    kwargs = ResponsesApiTransport().build_kwargs(
+        model='gpt-6-luna', messages=[{'role': 'user', 'content': 'hi'}], provider='openai',
+        base_url='https://api.openai.com/v1', reasoning_config={'enabled': True, 'effort': 'low'},
+        request_overrides={'reasoning': {'effort': 'high'}},
+    )
+    assert kwargs['reasoning']['effort'] == 'high'
+
+
+def test_claude_lineage_filtered_markers_keep_the_beta_and_effort_mapping():
+    from agent.anthropic_adapter import build_anthropic_kwargs
+    from agent.effort_updates import ANTHROPIC_MID_CONVERSATION_EFFORT_BETA, EFFORT_UPDATE_KEY, make_effort_update_message
+
+    def wire(msg):
+        api = {k: v for k, v in msg.items() if k not in ('display_kind', 'display_metadata')}
+        if (u := effort_update(msg)) is not None:
+            api[EFFORT_UPDATE_KEY] = u
+        return api
+    history = [
+        {'role': 'user', 'content': 'a'}, {'role': 'assistant', 'content': 'b'},
+        make_effort_update_message('low', 'high', lineage='old'),  # previous model's lineage
+        {'role': 'user', 'content': 'c'}, {'role': 'assistant', 'content': 'd'},
+        make_effort_update_message('medium', 'medium', lineage='new', reset=True),
+        {'role': 'user', 'content': 'e'}, {'role': 'assistant', 'content': 'f'},
+        make_effort_update_message('ultra', 'medium', lineage='new'),
+        {'role': 'user', 'content': 'g'},
+    ]
+    kwargs = build_anthropic_kwargs('claude-fable-5-1', [wire(m) for m in history], None, None,
+                                    {'enabled': True, 'effort': 'ultra'})
+    in_band = [m for m in kwargs['messages'] if m['role'] == 'system']
+    assert in_band == [{'role': 'system', 'content': [], 'output_config': {'effort': 'max'}}]
+    assert ANTHROPIC_MID_CONVERSATION_EFFORT_BETA in kwargs['extra_headers']['anthropic-beta']

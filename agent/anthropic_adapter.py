@@ -692,7 +692,9 @@ def _resolve_effort_markers(
     ):
         return strip_effort_updates(messages), None, False
     resolved, top_level = resolve_effort_updates(messages, requested)
-    return resolved, top_level, resolved is messages and any(effort_update(m) for m in messages)
+    # Lowered when any retained marker is a real switch (a lineage filter returns a new list).
+    lowered = any((u := effort_update(m)) is not None and not u.get("reset") for m in resolved)
+    return resolved, top_level, lowered
 
 
 # OpenAI tool_choice -> Anthropic; any other string is a forced tool name.
