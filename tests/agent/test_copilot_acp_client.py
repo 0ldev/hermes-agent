@@ -479,6 +479,34 @@ print(json.dumps({{"jsonrpc": "2.0", "id": session["id"], "result": {{"sessionId
     assert client.list_models(timeout_seconds=30) == ["gpt-5.6-sol"]
 
 
+_REPLY_AFTER_EXIT_ACP_CLI = """
+import subprocess, sys
+# A straggler inherits the pipes and answers after this process has exited, so poll() reports
+# the exit before the client has read a single reply.
+subprocess.Popen([sys.executable, "-c", '''
+import json, sys, time
+time.sleep(0.3)
+for line in sys.stdin:
+    request = json.loads(line)
+    if request["method"] == "initialize":
+        result = {"protocolVersion": 1}
+    else:
+        result = {"sessionId": "s", "configOptions": [{"id": "model", "options": [{"value": "gpt-5.6-sol"}]}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+'''])
+sys.exit(0)
+"""
+
+
+def test_replies_written_before_exit_are_read_not_reported_as_early_exit(tmp_path):
+    """Seeing the CLI exit must not discard replies still in the stdout pipe."""
+    server = tmp_path / "reply_after_exit_acp.py"
+    server.write_text(_REPLY_AFTER_EXIT_ACP_CLI, encoding="utf-8")
+    client = CopilotACPClient(command=sys.executable, args=[str(server)], acp_cwd=str(tmp_path))
+
+    assert client.list_models(timeout_seconds=30) == ["gpt-5.6-sol"]
+
+
 # --- concurrent sessions on a shared client ---------------------------------
 #
 # Aux clients are cached per provider config and served to every concurrent
