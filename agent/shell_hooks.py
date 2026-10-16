@@ -79,14 +79,18 @@ def _utc_now_iso() -> str:
 def _resolve_hook_cwd(kwargs: dict[str, Any]) -> str:
     """The session's working directory, not the process launch dir: a gateway, Desktop backend or
     multiplexed host serves many sessions from one cwd. Terminal-writer key first (the routing key
-    when bound, else the task id), then the file tools' ladder so hooks and file tools agree."""
+    when bound, else the task id), then the file tools' workspace ladder so hooks and file tools agree.
+    Reads recorded state only: building a payload must never start a terminal backend (SSH connect)."""
     from tools.approval_context import get_current_session_key
-    from tools.file_tools import _resolve_base_dir
+    from tools.file_tools_paths import _authoritative_workspace_root
     from tools.terminal_tool import get_session_cwd
 
     task_id = str(kwargs.get("task_id") or kwargs.get("session_id") or "default")
+    recorded = get_session_cwd(get_current_session_key(default="") or task_id) or _authoritative_workspace_root(task_id)
+    if recorded:
+        return recorded
     try:
-        return get_session_cwd(get_current_session_key(default="") or task_id) or str(_resolve_base_dir(task_id))
+        return str(Path.cwd())
     except OSError:  # no session anchor and the launch dir was deleted
         return ""
 

@@ -98,7 +98,7 @@ class TestHookCwd:
             terminal_tool.clear_session_cwd("t-99")
         assert payload["cwd"] == str(task_dir)
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell script")
+    @pytest.mark.platforms("posix")  # POSIX shell script
     def test_hook_process_runs_in_the_session_cwd(self, tmp_path, monkeypatch):
         from tools import terminal_tool
 
