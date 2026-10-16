@@ -676,8 +676,8 @@ def _supports_effort_updates(model: str) -> bool:
 
 
 def _resolve_effort_markers(
-    messages: List[Dict], model: str, reasoning_config: Optional[Dict[str, Any]], base_url: str | None,
-) -> tuple[List[Dict], Optional[str], bool]:
+    messages: list[dict], model: str, reasoning_config: Optional[dict[str, Any]], base_url: str | None,
+) -> tuple[list[dict], Optional[str], bool]:
     """``(messages, top_level_effort, lowered)``. On a Claude API model that accepts in-band effort
     updates the markers stay and the top-level effort freezes at the session baseline (the cached
     prefix was built with it); everywhere else the markers are stripped and the configured effort

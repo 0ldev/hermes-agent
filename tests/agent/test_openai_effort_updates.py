@@ -37,7 +37,7 @@ def test_openai_effort_update_pins_baseline_and_fails_closed():
     assert supported["input"][-2:] == [
         {"type": "configuration_update", "reasoning": {"effort": "low"}},
         {
-            "role": "user",
+            "type": "message", "role": "user",
             "content": [{"type": "input_text", "text": "continue"}],
         },
     ]
@@ -83,7 +83,7 @@ def test_official_gpt6_tiers_preserve_none_to_max_updates():
         assert prepared["reasoning"]["effort"] == "max"
         assert prepared["input"][-2:] == [
             {"type": "configuration_update", "reasoning": {"effort": "none"}},
-            {"role": "user", "content": "continue"},
+            {"type": "message", "role": "user", "content": "continue"},
         ]
         assert "context_management" not in prepared
 

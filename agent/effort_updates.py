@@ -26,7 +26,7 @@ EFFORT_BASELINE_KEY = "_reasoning_effort_baseline"
 ANTHROPIC_MID_CONVERSATION_EFFORT_BETA = "mid-conversation-output-config-2026-07-01"
 
 
-def effort_update(msg: Any) -> Optional[Dict[str, Any]]:
+def effort_update(msg: Any) -> Optional[dict[str, Any]]:
     """The marker payload (``{"effort", "previous"}``) when ``msg`` is an effort marker, else None.
     Read from the top-level key (per-call API copies) or ``display_metadata`` (durable rows)."""
     if not isinstance(msg, dict) or msg.get("role") != "system":
@@ -40,8 +40,8 @@ def effort_update(msg: Any) -> Optional[Dict[str, Any]]:
 
 def make_effort_update_message(
     effort: str, previous: str, *, route: str = "", lineage: str = "", reset: bool = False,
-) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"effort": effort, "previous": previous}
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"effort": effort, "previous": previous}
     if route:
         payload["route"] = route
     if lineage:
@@ -56,15 +56,15 @@ def make_effort_update_message(
     }
 
 
-def strip_effort_updates(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def strip_effort_updates(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """``messages`` without markers (the same list object when there are none)."""
     stripped = [m for m in messages if effort_update(m) is None]
     return messages if len(stripped) == len(messages) else stripped
 
 
 def resolve_effort_updates(
-    messages: List[Dict[str, Any]], current: Optional[str]
-) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    messages: list[dict[str, Any]], current: Optional[str]
+) -> tuple[list[dict[str, Any]], Optional[str]]:
     """``(messages, top_level_effort)`` for a route that lowers markers natively. The top-level
     effort is the FIRST marker's ``previous`` (the baseline every cached request was built with).
     Reverted or forked history can leave the last marker disagreeing with the requested effort;
@@ -101,7 +101,7 @@ def _effort_route(agent: Any) -> str:
     ))
 
 
-def _baseline_record(agent: Any) -> Optional[Dict[str, Any]]:
+def _baseline_record(agent: Any) -> Optional[dict[str, Any]]:
     """Return the durable effort/route/lineage record for this session."""
     db = getattr(agent, "_session_db", None)
     session_id = getattr(agent, "session_id", None)
@@ -136,7 +136,7 @@ def _baseline_record(agent: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def _write_baseline_record(agent: Any, record: Dict[str, Any]) -> None:
+def _write_baseline_record(agent: Any, record: dict[str, Any]) -> None:
     initial = getattr(agent, "_session_init_model_config", None)
     if isinstance(initial, dict):
         initial[EFFORT_BASELINE_KEY] = dict(record)
@@ -149,7 +149,7 @@ def _write_baseline_record(agent: Any, record: Dict[str, Any]) -> None:
             logger.debug("effort baseline: session model_config write failed", exc_info=True)
 
 
-def record_effort_switch(agent: Any, messages: List[Dict[str, Any]]) -> bool:
+def record_effort_switch(agent: Any, messages: list[dict[str, Any]]) -> bool:
     """Append a marker to ``messages`` when this turn's effort differs from the effort the history
     was sent with. Called right before the new user message lands so the marker sits at a fixed
     position in the durable transcript (a marker that moved each turn would invalidate the tail it
