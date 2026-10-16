@@ -97,6 +97,25 @@ class TestHookCwd:
         finally:
             terminal_tool.clear_session_cwd("t-99")
         assert payload["cwd"] == str(task_dir)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell script")
+    def test_hook_process_runs_in_the_session_cwd(self, tmp_path, monkeypatch):
+        from tools import terminal_tool
+
+        process_cwd, task_dir = tmp_path / "process", tmp_path / "proj"
+        process_cwd.mkdir()
+        task_dir.mkdir()
+        monkeypatch.chdir(process_cwd)
+        script = _write_script(tmp_path, "pwd.sh", "#!/bin/sh\ncat >/dev/null\nprintf '{\"context\": \"%s\"}' \"$(pwd -P)\"\n")
+        terminal_tool.record_session_cwd("t-7", str(task_dir))
+        try:
+            out = shell_hooks._make_callback(shell_hooks.ShellHookSpec(event="pre_llm_call", command=str(script)))(
+                session_id="s", task_id="t-7")
+        finally:
+            terminal_tool.clear_session_cwd("t-7")
+        assert out == {"context": os.path.realpath(task_dir)}
+
+
 # ── Matcher behaviour ─────────────────────────────────────────────────────
 
 
