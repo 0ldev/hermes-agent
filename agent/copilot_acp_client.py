@@ -412,11 +412,19 @@ class CopilotACPClient:
         # request: a hung CLI must not get 2x the caller's timeout on the foreground /model path.
         session_deadline = time.monotonic() + timeout_seconds
 
+        def _send(payload: dict[str, Any]) -> None:
+            # A CLI that died (or closed stdin) mid-session turns this write into a BrokenPipeError
+            # (EINVAL on Windows) that would replace the crash report; the read loop reports it instead.
+            try:
+                proc.stdin.write(json.dumps(payload) + "\n")
+                proc.stdin.flush()
+            except OSError:
+                logger.debug("Copilot ACP stdin is closed; reporting the CLI's exit instead", exc_info=True)
+
         def _request(method: str, params: dict[str, Any], *, text_parts: list[str] | None = None,
                      reasoning_parts: list[str] | None = None) -> Any:
             request_id = next(request_ids)
-            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
-            proc.stdin.flush()
+            _send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
             deadline = session_deadline
             exit_deadline = None
             while time.monotonic() < min(deadline, exit_deadline or deadline):
@@ -516,6 +524,10 @@ class CopilotACPClient:
                     response = _jsonrpc_error(message_id, -32602, str(exc))
         else:
             response = _jsonrpc_error(message_id, -32601, f"ACP client method '{method}' is not supported by Hermes yet.")
-        process.stdin.write(json.dumps(response) + "\n")
-        process.stdin.flush()
+        try:
+            process.stdin.write(json.dumps(response) + "\n")
+            process.stdin.flush()
+        except OSError:
+            # The CLI died with this request pending; the caller's read loop reports the exit.
+            logger.debug("Copilot ACP stdin is closed; dropping the answer to %s", method, exc_info=True)
         return True

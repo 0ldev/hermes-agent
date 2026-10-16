@@ -557,6 +557,43 @@ def test_final_reply_queued_as_the_pump_finishes_is_still_read(tmp_path, monkeyp
     assert len(held_back) == 2
 
 
+_CRASH_WITH_FILE_REQUEST_QUEUED_ACP_CLI = """
+import json, os, sys
+json.loads(sys.stdin.readline())
+# Close stdin before the request goes out, so the client's answer always hits a closed pipe.
+os.close(0)
+print(json.dumps({"jsonrpc": "2.0", "id": 99, "method": "fs/read_text_file", "params": {"path": "x"}}), flush=True)
+print("fatal: agent crashed mid-request", file=sys.stderr, flush=True)
+sys.exit(3)
+"""
+
+_CRASH_AFTER_FIRST_REPLY_ACP_CLI = """
+import json, os, sys
+request = json.loads(sys.stdin.readline())
+# Close stdin before replying, so the client's next request always hits a closed pipe.
+os.close(0)
+print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": 1}}), flush=True)
+print("fatal: agent crashed after initialize", file=sys.stderr, flush=True)
+sys.exit(3)
+"""
+
+
+@pytest.mark.parametrize(("cli", "crash_text"), [
+    (_CRASH_WITH_FILE_REQUEST_QUEUED_ACP_CLI, "fatal: agent crashed mid-request"),
+    (_CRASH_AFTER_FIRST_REPLY_ACP_CLI, "fatal: agent crashed after initialize"),
+], ids=["answering-a-server-request", "sending-the-next-request"])
+def test_writing_to_a_dead_cli_still_reports_the_crash(tmp_path, cli, crash_text):
+    """A write into the dead CLI's closed stdin must not replace the crash report with a bare
+    BrokenPipeError: the early-exit error and its stderr are what the caller acts on."""
+    server = tmp_path / "crashing_acp.py"
+    server.write_text(cli, encoding="utf-8")
+    client = CopilotACPClient(command=sys.executable, args=[str(server)], acp_cwd=str(tmp_path))
+
+    with pytest.raises(RuntimeError, match=f"exited early: {crash_text}"):
+        with client._session(30):
+            pass
+
+
 # --- concurrent sessions on a shared client ---------------------------------
 #
 # Aux clients are cached per provider config and served to every concurrent
