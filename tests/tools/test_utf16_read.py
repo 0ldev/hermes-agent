@@ -104,3 +104,24 @@ class TestUtf16Read:
         assert result.error is None
         assert "just utf-8" in result.content
         assert "Transcoded" not in (result.hint or "")
+
+
+class TestUtf16BomEdits:
+    """A BOM names the encoding, so edits keep the file UTF-16 instead of converting it."""
+
+    @pytest.mark.parametrize("enc", ["utf-16-le", "utf-16-be"])
+    def test_patch_and_write_keep_bom_utf16_and_crlf(self, fops, tmp_path, enc):
+        p = tmp_path / "script.ps1"
+        p.write_bytes("\ufeffWrite-Host 'héllo'\r\nWrite-Host '日本'\r\n".encode(enc))
+        r = fops.patch_replace(str(p), "Write-Host 'héllo'", "Echo 'hi'")
+        assert r.success, r.error
+        assert p.read_bytes() == "\ufeffEcho 'hi'\r\nWrite-Host '日本'\r\n".encode(enc)
+        w = fops.write_file(str(p), "one\ntwo ü\n")
+        assert w.error is None and w.verified
+        assert p.read_bytes() == "\ufeffone\r\ntwo ü\r\n".encode(enc)
+
+    def test_bomless_utf16_still_written_as_utf8(self, fops, tmp_path):
+        p = tmp_path / "guess.txt"
+        p.write_bytes("plain text\n".encode("utf-16-le"))
+        assert fops.write_file(str(p), "new\n").error is None
+        assert p.read_bytes() == b"new\n"
