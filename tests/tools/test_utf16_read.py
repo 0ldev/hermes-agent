@@ -131,3 +131,12 @@ class TestUtf16BomEdits:
         p.write_bytes(raw)
         assert fops.write_file(str(p), "new\n").error is None
         assert p.read_bytes() == b"new\n"
+
+    def test_unreadable_utf16_target_is_refused_not_converted(self, fops, tmp_path, monkeypatch):
+        p = tmp_path / "script.ps1"
+        original = "\ufeffkeep\r\n".encode("utf-16-le")
+        p.write_bytes(original)
+        monkeypatch.setattr(fops, "_read_exact_bytes", lambda path: (None, None))
+        w = fops.write_file(str(p), "new\n")
+        assert w.error and "UTF-16" in w.error
+        assert p.read_bytes() == original

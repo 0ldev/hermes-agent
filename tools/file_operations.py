@@ -149,6 +149,8 @@ MISSING_SENTINEL = "__hermes_missing__"
 
 _READ_SENTINEL_PREFIX = "__HERMES_RF_"
 _WRITE_SENTINEL_PREFIX = "__HERMES_WF_"
+# _probe_write_target's encoding slot when a UTF-16 mark was seen but the exact read failed.
+_UTF16_UNREADABLE = "unreadable"
 _BYTES_SENTINEL_PREFIX = "__HERMES_RB_"
 
 
@@ -1419,7 +1421,8 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         pre-content is read only when wanted and not supplied; the line ending comes
         from pre-content when there is any, else from the sample; the BOM always comes
         from disk, and so does ``utf16_encoding`` (``utf-16-le``/``-be`` when the file
-        starts with that BOM, else None). An unparseable reply falls back to the separate
+        starts with that BOM and decodes, ``_UTF16_UNREADABLE`` when the exact read
+        failed, else None). An unparseable reply falls back to the separate
         probes."""
         if want_pre and pre_content is None:
             body_mode: Optional[str] = "cat"
@@ -1468,7 +1471,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             # read_file_raw apply the same rule); a malformed one keeps the byte-preserving
             # UTF-8 path below.
             data, _failed = self._read_exact_bytes(path)
-            decoded = _decode_utf16_bom(data) if data is not None else None
+            if data is None:
+                # Unknown bytes: writing UTF-8 over a real UTF-16 file would convert it.
+                return has_bom, pre_content, None, _UTF16_UNREADABLE
+            decoded = _decode_utf16_bom(data)
             if decoded is not None:
                 text = decoded[0]
                 if body_mode == "cat":
@@ -1548,6 +1554,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         # LSP coverage (keeps the hot path fast for binaries).
         want_pre = ext in LINTERS_INPROC or self._lsp_handles_extension(ext)
         has_bom, pre_content, original_ending, utf16 = self._probe_write_target(path, pre_content, want_pre)
+        if utf16 == _UTF16_UNREADABLE:
+            return WriteResult(error=(
+                f"Refusing to write '{path}': it starts with a UTF-16 byte-order mark but its "
+                "bytes could not be read back to keep that encoding. Retry the write."))
         if ext == ".json":
             refused = _refuse_introduced_json_constant(path, content, pre_content)
             if refused is not None:
