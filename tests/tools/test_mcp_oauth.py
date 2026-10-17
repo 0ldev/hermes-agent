@@ -681,44 +681,27 @@ class TestInvalidateTokensOnClientChange:
         assert info["client_id"] == "client-b"
 
 
-    def test_preregister_flow_unresolved_placeholder_keeps_tokens(self, tmp_path, monkeypatch, caplog):
-        """A ${VAR} the current context never expanded must not be treated as a new client
-        identity: pre-registering it would rewrite client.json with the literal placeholder
-        and drop the valid stored tokens, forcing a re-login on every session open (#108253
-        — a unified-dashboard process serving a secondary profile whose .env it never loaded)."""
+    @pytest.mark.parametrize("oauth_cfg", [
+        {"client_id": "${HA_MCP_CLIENT_ID}"},
+        {"client_id": "real-client", "client_secret": "${HA_MCP_CLIENT_SECRET}"},
+    ])
+    def test_preregister_flow_unresolved_placeholder_keeps_tokens(self, tmp_path, monkeypatch, caplog, oauth_cfg):
+        """A ${VAR} the current context never expanded is not a client identity (#108253 — a
+        unified-dashboard process serving a profile whose .env it never loaded). Every flow copies
+        the oauth block through prepare_oauth_config: the pair is dropped there, so the stored client
+        and tokens survive and the placeholder is never sent as client_id."""
         pytest.importorskip("mcp")
-        from tools.mcp_oauth import (
-            _build_client_metadata, _maybe_preregister_client,
-        )
+        from tools.mcp_oauth import _build_client_metadata, _maybe_preregister_client
+        from tools.mcp_oauth_provider import prepare_oauth_config
         storage, d = self._seed(tmp_path, monkeypatch, client_id="real-client")
-        cfg = {"client_id": "${HA_MCP_CLIENT_ID}", "_resolved_port": 1455}
-        meta = _build_client_metadata(dict(cfg))
         with caplog.at_level("WARNING", logger="tools.mcp_oauth"):
-            _maybe_preregister_client(storage, cfg, meta)
-        assert (d / "chg-server.json").exists(), (
-            "an unresolved placeholder must not invalidate the stored token")
-        assert (d / "chg-server.meta.json").exists()
-        info = json.loads((d / "chg-server.client.json").read_text())
-        assert info["client_id"] == "real-client", (
-            "client.json must keep the registered identity, not the placeholder")
-        assert any("unresolved ${VAR}" in r.getMessage() for r in caplog.records)
-
-    def test_preregister_flow_placeholder_secret_keeps_tokens(self, tmp_path, monkeypatch):
-        """A placeholder secret alone must skip the overwrite too: the identity comparison
-        would see None vs "${...}" as a changed secret and drop the tokens."""
-        pytest.importorskip("mcp")
-        from tools.mcp_oauth import (
-            _build_client_metadata, _maybe_preregister_client,
-        )
-        storage, d = self._seed(tmp_path, monkeypatch, client_id="real-client")
-        cfg = {"client_id": "real-client",
-               "client_secret": "${HA_MCP_CLIENT_SECRET}",
-               "_resolved_port": 1455}
-        meta = _build_client_metadata(dict(cfg))
-        _maybe_preregister_client(storage, cfg, meta)
-        assert (d / "chg-server.json").exists()
-        info = json.loads((d / "chg-server.client.json").read_text())
-        assert info["client_id"] == "real-client"
+            cfg, _ = prepare_oauth_config("chg-server", "https://mcp.example.com/mcp", oauth_cfg)
+        assert "client_id" not in cfg and "client_secret" not in cfg
+        assert any("not set in this profile" in r.getMessage() for r in caplog.records)
+        cfg["_resolved_port"] = 1455
+        _maybe_preregister_client(storage, cfg, _build_client_metadata(dict(cfg)))
+        assert (d / "chg-server.json").exists() and (d / "chg-server.meta.json").exists()
+        assert json.loads((d / "chg-server.client.json").read_text())["client_id"] == "real-client"
 
 
 # ---------------------------------------------------------------------------

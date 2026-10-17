@@ -1161,13 +1161,27 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
 # callers can detect them). In a context that never loaded the profile's ``.env`` — e.g. the
 # launch profile's unified-dashboard process opening a secondary profile's session (#108253) —
 # the placeholder is NOT the configured client identity: pre-registering it would rewrite
-# ``client.json`` with the literal placeholder and drop the valid stored tokens.
-_UNRESOLVED_ENV_REF_RE = re.compile(r"\$\{[^}]+\}")
+# ``client.json`` with the literal placeholder and drop the valid stored tokens, and a login
+# would send it to the authorization server as the client_id.
+_UNRESOLVED_ENV_REF_RE = re.compile(r"\$\{([^}]+)\}")
 
 
-def _is_unresolved_env_ref(value: Any) -> bool:
-    """True when a config string still carries a ``${VAR}`` placeholder the env expansion missed."""
-    return isinstance(value, str) and _UNRESOLVED_ENV_REF_RE.search(value) is not None
+def drop_unresolved_client_refs(cfg: dict, server_name: str) -> dict:
+    """Drop the configured client pair when ``client_id`` or ``client_secret`` still carries a ``${VAR}``.
+
+    Applied once where every flow (runtime provider, browser login, device login) copies the
+    ``oauth:`` block, so the placeholder is never persisted nor sent. Both keys go together: an id
+    kept without its secret would read as a changed identity and discard the stored tokens. A
+    stored client keeps working; a fresh login takes the normal unconfigured path."""
+    refs = sorted({ref for key in ("client_id", "client_secret") if isinstance(cfg.get(key), str)
+                   for ref in _UNRESOLVED_ENV_REF_RE.findall(cfg[key])})
+    if refs:
+        cfg.pop("client_id", None)
+        cfg.pop("client_secret", None)
+        logger.warning("MCP OAuth '%s': oauth client credentials reference %s, which is not set in this "
+                       "profile's .env or secret source; ignoring the configured client (stored client and "
+                       "tokens are left untouched)", server_name, ", ".join(f"${{{r}}}" for r in refs))
+    return cfg
 
 
 def _invalidate_tokens_on_client_change(
@@ -1204,12 +1218,6 @@ def _maybe_preregister_client(storage: HermesTokenStorage, cfg: dict, client_met
     """If cfg has a pre-registered client_id, persist it to storage."""
     client_id = cfg.get("client_id")
     if not client_id:
-        return
-    if _is_unresolved_env_ref(client_id) or _is_unresolved_env_ref(cfg.get("client_secret")):
-        logger.warning(
-            "MCP OAuth '%s': oauth client_id/client_secret still contain an unresolved ${VAR} placeholder "
-            "(the referenced env var is not set in this context); leaving the stored client and tokens "
-            "untouched", storage._server_name)
         return
     info_cls = _sdk_class("OAuthClientInformationFull")
     _invalidate_tokens_on_client_change(storage, client_id, cfg.get("client_secret"))
