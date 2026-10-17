@@ -110,18 +110,24 @@ class TestUtf16BomEdits:
     """A BOM names the encoding, so edits keep the file UTF-16 instead of converting it."""
 
     @pytest.mark.parametrize("enc", ["utf-16-le", "utf-16-be"])
-    def test_patch_and_write_keep_bom_utf16_and_crlf(self, fops, tmp_path, enc):
+    @pytest.mark.parametrize("nl", ["\r\n", "\n"])
+    def test_patch_and_write_keep_bom_utf16_and_endings(self, fops, tmp_path, enc, nl):
+        # Leading U+FEFF after the mark is data; "č" + LF in UTF-16BE is 01 0D 00 0A (no CR).
         p = tmp_path / "script.ps1"
-        p.write_bytes("\ufeffWrite-Host 'héllo'\r\nWrite-Host '日本'\r\n".encode(enc))
+        p.write_bytes(f"\ufeff\ufeffWrite-Host 'héllo'{nl}Write-Host 'č'{nl}".encode(enc))
         r = fops.patch_replace(str(p), "Write-Host 'héllo'", "Echo 'hi'")
         assert r.success, r.error
-        assert p.read_bytes() == "\ufeffEcho 'hi'\r\nWrite-Host '日本'\r\n".encode(enc)
-        w = fops.write_file(str(p), "one\ntwo ü\n")
+        assert p.read_bytes() == f"\ufeff\ufeffEcho 'hi'{nl}Write-Host 'č'{nl}".encode(enc)
+        w = fops.write_file(str(p), "one\ntwo č\n")
         assert w.error is None and w.verified
-        assert p.read_bytes() == "\ufeffone\r\ntwo ü\r\n".encode(enc)
+        assert p.read_bytes() == f"\ufeffone{nl}two č{nl}".encode(enc)
 
-    def test_bomless_utf16_still_written_as_utf8(self, fops, tmp_path):
+    @pytest.mark.parametrize("raw", [
+        "plain text\n".encode("utf-16-le"),         # BOM-less: only a guess
+        "\ufeffplain text\n".encode("utf-32-le"),  # FF FE 00 00 is UTF-32, not UTF-16
+    ])
+    def test_non_bom_utf16_still_written_as_utf8(self, fops, tmp_path, raw):
         p = tmp_path / "guess.txt"
-        p.write_bytes("plain text\n".encode("utf-16-le"))
+        p.write_bytes(raw)
         assert fops.write_file(str(p), "new\n").error is None
         assert p.read_bytes() == b"new\n"

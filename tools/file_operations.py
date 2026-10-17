@@ -1393,7 +1393,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
 
     def _write_probe_cmd(self, path: str, sentinel: str, body: Optional[str]) -> str:
         """One shell command for the on-disk questions ``write_file`` asks. Two
-        segments closed by a ``sentinel`` line: base64 of the first three bytes (BOM
+        segments closed by a ``sentinel`` line: base64 of the first four bytes (BOM; four so a UTF-32LE mark is not taken for UTF-16LE
         detection at the byte layer, same on-disk truth as ``_file_has_bom``), then
         ``body``: ``"cat"`` for the full text when pre-content is wanted, ``"sample"``
         for the 4 KB line-ending sample, or None for nothing. Gated on ``[ -f ]`` so a
@@ -1407,7 +1407,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             body_cmd = ":"
         return (
             f"if [ -f {arg} ]; then "
-            f"head -c 3 {arg} 2>/dev/null | base64 2>/dev/null; echo {sentinel}; "
+            f"head -c 4 {arg} 2>/dev/null | base64 2>/dev/null; echo {sentinel}; "
             f"{body_cmd}; "
             f"else echo {MISSING_SENTINEL}; fi")
 
@@ -1463,15 +1463,17 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             utf16 = _utf16_bom_encoding(head_bytes)
 
         if utf16:
-            # The text transport mangles UTF-16, but CR, NUL and LF survive it: CRLF is
-            # "\r\x00\n" in either byte order. A caller's pre_content is already decoded.
-            if body_mode == "cat":
-                pre_content = None
-            if pre_content:
-                ending = _detect_line_ending(pre_content)
-            else:
-                ending = "\r\n" if "\r\x00\n" in (body or "") else ("\n" if "\n" in (body or "") else None)
-            return has_bom, pre_content, ending, utf16
+            # The text transport mangles UTF-16, so take the exact bytes once and decode them.
+            # Only a file that decodes cleanly is written back as UTF-16 (patch_replace and
+            # read_file_raw apply the same rule); a malformed one keeps the byte-preserving
+            # UTF-8 path below.
+            data, _failed = self._read_exact_bytes(path)
+            decoded = _decode_utf16_bom(data) if data is not None else None
+            if decoded is not None:
+                text = decoded[0]
+                if body_mode == "cat":
+                    pre_content = text
+                return has_bom, pre_content, _detect_line_ending(pre_content or text), decoded[1]
         if body_mode == "cat" and body:
             pre_content = body
         if pre_content:
@@ -1555,10 +1557,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         if original_ending == "\r\n":
             content = _normalize_line_endings(content, "\r\n")
         if utf16:
-            # Keep a BOM-marked UTF-16 file UTF-16. The transport carries str and encodes it
-            # as UTF-8 with surrogateescape, so the UTF-16 bytes ride it decoded the inverse
-            # way and land on disk exactly.
-            content, _ = _strip_bom(content)
+            # Keep a BOM-marked UTF-16 file UTF-16: the mark is added here exactly once, and a
+            # leading U+FEFF in ``content`` is data. The transport carries str and encodes it as
+            # UTF-8 with surrogateescape, so the UTF-16 bytes ride it decoded the inverse way and
+            # land on disk exactly. Lone surrogates were refused above, so the encode cannot fail.
             transport = (_UTF8_BOM + content).encode(utf16).decode("utf-8", "surrogateescape")
         elif has_bom and not _has_bom(content):
             content = _UTF8_BOM + content
@@ -1624,7 +1626,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         if data is None:
             return PatchResult(error=f"Post-write verification failed: could not re-read {path}")
         utf16 = _decode_utf16_bom(data)
-        bomless, _ = _strip_bom(utf16[0] if utf16 else data.decode("utf-8", "surrogateescape"))
+        bomless = utf16[0] if utf16 else _strip_bom(data.decode("utf-8", "surrogateescape"))[0]
         on_disk = bomless.replace("\r\n", "\n").replace("\r", "\n")
         intended = new_content.replace("\r\n", "\n").replace("\r", "\n")
         if on_disk != intended:
@@ -1651,9 +1653,9 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         # surrogateescape lets write_file restore any byte UTF-8 cannot decode (#79178).
         # Match and diff on BOM-stripped content (a phantom U+FEFF defeats an exact
         # first-line match); the raw read becomes write_file's pre_content.
-        utf16 = _decode_utf16_bom(data)
+        utf16 = _decode_utf16_bom(data)  # mark already removed: a leading U+FEFF left is data
         raw_content = utf16[0] if utf16 else data.decode("utf-8", "surrogateescape")
-        content, _ = _strip_bom(raw_content)
+        content = raw_content if utf16 else _strip_bom(raw_content)[0]
 
         from tools.fuzzy_match import boundary_note, fuzzy_find_and_replace
         correction_notes = []
