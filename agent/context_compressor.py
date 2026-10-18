@@ -322,9 +322,9 @@ _DB_PERSISTED_MARKER = "_db_persisted"
 # Carried-forward tail rows archive as rewind-style (active=0, compacted=0) so
 # they don't duplicate live copies in recall; never persisted (unknown column).
 _COMPACTION_TAIL_MARKER = "_compaction_tail"
-PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY = "_proactive_prune_rearm_tokens"
-# Reclaim gate for a prune on an already-expired provider cache (no cache break to amortize).
-_COLD_CACHE_MIN_RECLAIM_TOKENS = 16_000
+PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY, PROACTIVE_PRUNE_COLD_CREDIT_MODEL_CONFIG_KEY = (
+    "_proactive_prune_rearm_tokens", "_proactive_prune_cold_credit")
+_COLD_CACHE_MIN_RECLAIM_TOKENS = 16_000  # reclaim gate on an already-expired provider cache (no break to amortize)
 
 _NO_USER_TASK_SENTINEL = "None. This session contains no user-authored turns."
 COMPRESSION_CONTINUATION_USER_CONTENT = (
@@ -2430,15 +2430,15 @@ class ContextCompressor(
         self._load_durable("_fallback_compression_streak", "get_compression_fallback_streak", "compression fallback streak", int, 0)
 
     def _load_proactive_prune_rearm_tokens(self) -> None:
-        """Restore the cache-boundary runway for a resumed durable session."""
-        self._load_durable(
-            "_proactive_prune_rearm_tokens", "get_session_model_config_value", "proactive prune runway",
-            int, 0, PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY, 0,
-        )
+        """Restore the cache-boundary runway and the cold-prune credit for a resumed durable session."""
+        for attr, key in (("_proactive_prune_rearm_tokens", PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY),
+                          ("_proactive_prune_cold_credit", PROACTIVE_PRUNE_COLD_CREDIT_MODEL_CONFIG_KEY)):
+            self._load_durable(attr, "get_session_model_config_value", "proactive prune runway", int, 0, key, 0)
 
     def _clear_durable_proactive_prune_rearm(self) -> None:
-        """Best-effort removal of the persisted prune-runway key; transcript untouched."""
-        self._durable_write("patch_session_model_config", "proactive prune runway clear", {PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY: None})
+        """Best-effort removal of the persisted prune-runway keys; transcript untouched."""
+        self._durable_write("patch_session_model_config", "proactive prune runway clear", {
+            PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY: None, PROACTIVE_PRUNE_COLD_CREDIT_MODEL_CONFIG_KEY: None})
 
     def _persist_fallback_compression_streak(self) -> None:
         self._durable_write("set_compression_fallback_streak", "compression fallback streak", self._fallback_compression_streak)
@@ -3419,10 +3419,9 @@ class ContextCompressor(
         # Under-threshold runway skip is ordinary hysteresis (silent); above it the lockout is the bug.
         if not cold_cache and before < self._proactive_prune_rearm_tokens and not self._billed_basis_over_threshold(current_tokens):
             return messages, 0
-        # Capability gate first: a store without archive_and_compact makes every prune a no-op.
-        session_db = getattr(self, "_session_db", None)
-        session_id = getattr(self, "_session_id", "")
-        if session_db and session_id and not callable(getattr(session_db, "archive_and_compact", None)):
+        # Capability gate first: a store that cannot archive (no archive_and_compact, or no bound row) loses the originals.
+        session_db, session_id = getattr(self, "_session_db", None), getattr(self, "_session_id", "")
+        if session_db and not (session_id and callable(getattr(session_db, "archive_and_compact", None))):
             self._warn_reclamation_no_op("prune:store_cannot_persist", current_tokens)
             return messages, 0
         pruned_msgs, pruned_count = self._prune_old_tool_results(
@@ -3450,7 +3449,8 @@ class ContextCompressor(
                 covered_ids, unresolved_held = coverage_for_commit(session_db, session_id, messages)
                 session_db.archive_and_compact(
                     session_id, pruned_msgs,
-                    model_config_patch={PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY: next_rearm_tokens},
+                    model_config_patch={PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY: next_rearm_tokens,
+                                        PROACTIVE_PRUNE_COLD_CREDIT_MODEL_CONFIG_KEY: cold_credit},
                     watermark=_archive_watermark_for(session_db, session_id, messages),
                     covered_ids=covered_ids, unresolved_held=unresolved_held,
                 )
