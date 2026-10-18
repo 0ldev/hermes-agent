@@ -1029,6 +1029,7 @@ class TurnController {
     // Session boundary: drop notice state so session A's sticky can't bleed
     // into session B (R3-H5). reset()/fullReset() CLEAR — they never flush.
     this.clearNoticeState()
+    $turnOutcome.set(null)
     patchTurnState({ activity: [], outcome: '' })
   }
 
