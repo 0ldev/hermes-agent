@@ -8,6 +8,7 @@ owned child (``spawn_owned``), so it also dies with a SIGKILLed or OOM-killed He
 """
 
 import functools
+import json
 import logging
 import os
 import shutil
@@ -269,3 +270,62 @@ def stop_all_lightpanda() -> None:
             stop_lightpanda(name)
         except Exception as e:
             logger.debug("lightpanda stop failed for %s: %s", name, e)
+
+
+def _is_lightpanda_process(pid: int, port, start_time) -> bool:
+    """True only when ``pid`` is verifiably the ``lightpanda serve`` a record names."""
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        if "lightpanda" not in proc.name().lower():
+            return False
+        cmdline = proc.cmdline()
+        if "serve" not in cmdline or str(port) not in cmdline:
+            return False
+        if start_time:
+            from gateway.status import get_process_start_time
+            return get_process_start_time(pid) == start_time
+    except Exception:
+        return False
+    return True
+
+
+def reap_legacy_lightpanda_records() -> int:
+    """Kill servers a pre-update Hermes left behind; return the count. Each record is then deleted.
+
+    Before servers were owned children, each launch wrote ``<state_dir>/<session>.json`` and an
+    orphan sweep reaped the server once its owner died. Servers are no longer recorded, but one
+    left by a crashed pre-update Hermes has only its record. A live owner is never touched (it may
+    still run old code that uses the server), and a pid is signalled only after psutil confirms it
+    is still ``lightpanda serve`` on the recorded port, with the recorded start time."""
+    try:
+        records = sorted(_state_dir().glob("*.json"))
+    except Exception as e:
+        logger.debug("lightpanda state dir unavailable: %s", e)
+        return 0
+    if not records:
+        return 0
+    from gateway.status import _pid_exists
+
+    reaped = 0
+    for record_path in records:
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(record, dict):
+                raise ValueError(f"expected a JSON object, got {type(record).__name__}")
+        except (OSError, ValueError):
+            record_path.unlink(missing_ok=True)
+            continue
+        owner_pid = record.get("owner_pid")
+        if owner_pid and int(owner_pid) != os.getpid() and _pid_exists(int(owner_pid)):
+            continue  # a live pre-update Hermes still owns it; its own cleanup (or this sweep later) ends it
+        pid = record.get("pid")
+        if pid and _is_lightpanda_process(int(pid), record.get("port"), record.get("start_time")):
+            try:
+                _tree_kill(int(pid), record.get("start_time"))
+                reaped += 1
+                logger.info("Reaped pre-update lightpanda serve pid %s (session %s)", pid, record_path.stem)
+            except Exception as e:
+                logger.debug("legacy lightpanda kill failed for pid %s: %s", pid, e)
+        record_path.unlink(missing_ok=True)
+    return reaped

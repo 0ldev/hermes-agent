@@ -389,6 +389,13 @@ def _reap_orphaned_browser_sessions():
     ``agent-browser-*`` socket dirs; safe from any context."""
     import glob
 
+    # Lightpanda servers are owned children now, but a crashed pre-update Hermes left only a record
+    # behind. Sweep those BEFORE the daemon scan, which may return early.
+    def _reap_lp():
+        from tools.browser_lightpanda import reap_legacy_lightpanda_records
+        reap_legacy_lightpanda_records()
+    _best_effort("Pre-update lightpanda reap", _reap_lp)
+
     tmpdir = _bt._socket_safe_tmpdir()
     socket_dirs = []
     # The shared real-profile attach daemon is named, not ``<prefix>_<hex>``; list it explicitly.

@@ -697,3 +697,9 @@ class TestLightpandaSessionLifecycle:
              patch("tools.browser_tool_lifecycle._reap_orphaned_browser_sessions"):
             bt_lifecycle._emergency_cleanup_all_sessions()
         stop_all.assert_called_once()
+
+    def test_orphan_reaper_sweeps_pre_update_lightpanda_records(self, tmp_path):
+        with patch("tools.browser_lightpanda.reap_legacy_lightpanda_records") as reap, \
+             patch("tools.browser_tool._socket_safe_tmpdir", return_value=str(tmp_path)):
+            bt_lifecycle._reap_orphaned_browser_sessions()
+        reap.assert_called_once()
