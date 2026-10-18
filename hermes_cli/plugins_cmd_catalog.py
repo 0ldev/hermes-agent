@@ -532,12 +532,24 @@ def surface_delta_lines(delta: dict[str, list[str]]) -> list[str]:
 
 class RepinConsentRequired(Exception):
     """The new pin widens the plugin's surface and no consent was given; nothing was changed on disk.
-    ``delta`` is :func:`surface_delta`'s mapping — surfaces hand it to the user and retry with consent."""
+    ``delta`` is :func:`surface_delta`'s mapping; ``findings`` are the scan findings the same pin would also
+    ask about, so one confirmation covers everything the retry accepts. Surfaces show both and retry."""
 
-    def __init__(self, name: str, sha: str, delta: dict[str, list[str]]):
-        self.name, self.sha, self.delta = name, sha, delta
+    def __init__(self, name: str, sha: str, delta: dict[str, list[str]], findings: Optional[list[str]] = None):
+        self.name, self.sha, self.delta, self.findings = name, sha, delta, list(findings or [])
         super().__init__(
             f"Updating '{name}' to {sha[:8]} adds {'; '.join(surface_delta_lines(delta))}. Confirm to continue.")
+
+
+def _preview_scan_findings(tree: Path, identifier: str) -> list[str]:
+    """Scan findings on a catalog pin's preview clone that an update would still ask the user to accept."""
+    from hermes_cli.plugins_cmd import PluginScanBlocked, _scan_plugin_tree
+    from hermes_cli.plugins_cmd_update import scan_finding_lines
+    try:
+        _scan_plugin_tree(tree, identifier, force=False, reviewed_pin=True, confirm_dangerous=True)
+    except PluginScanBlocked as exc:
+        return scan_finding_lines(exc.scan_result)
+    return []
 
 
 def repin_catalog_plugin(
@@ -591,7 +603,9 @@ def repin_catalog_plugin(
     def _consent_gate(manifest: dict, tree: Path) -> None:
         delta = surface_delta(installed_surface, plugin_surface(manifest, tree))
         if delta and not force and not (consent_cb is not None and consent_cb(delta)):
-            raise RepinConsentRequired(catalog_name, entry.sha, delta)
+            # A retry with consent also answers the scan, so name its findings in this same request.
+            raise RepinConsentRequired(catalog_name, entry.sha, delta,
+                                       _preview_scan_findings(tree, entry.install_identifier))
 
     # The catalog pin is immutable. Preview it before PM begins publication so a widened surface can
     # be declined without touching the live tree or writing a backup; update_plugin clones the same pin

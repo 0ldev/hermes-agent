@@ -112,6 +112,7 @@ def update_installed_plugin(target: Path, *, force: bool = False, interactive: b
                   else f"Already at catalog pin {result.sha[:8]}")
         return UpdateOutcome(result.installed_name, target.parent / result.installed_name, result.changed,
                              result.sha, output, list(result.warnings), catalog=True)
+    before = str(_pc()._read_install_metadata().get(name, {}).get("revision") or "")
     output = _pull_plugin_update(
         target,
         lambda rec: (
@@ -121,7 +122,7 @@ def update_installed_plugin(target: Path, *, force: bool = False, interactive: b
         lambda: f"Plugin '{name}' was not installed from git (no .git directory). Cannot update.",
         interactive=interactive, force=force, scan_decision_cb=scan_decision_cb)
     sha = str(_pc()._read_install_metadata().get(name, {}).get("revision") or "")
-    return UpdateOutcome(name, target, "Already up to date" not in output, sha, output.strip())
+    return UpdateOutcome(name, target, sha != before, sha, output.strip())
 
 
 def scan_finding_lines(scan_result, limit: int = 20) -> list[str]:
@@ -141,7 +142,7 @@ def update_consent_payload(name: str, exc: Exception) -> dict[str, Any] | None:
     from hermes_cli import plugins_cmd_catalog as catalog
     if isinstance(exc, catalog.RepinConsentRequired):
         return {"ok": False, "consent_required": True, "name": exc.name, "sha": exc.sha, "delta": exc.delta,
-                "delta_lines": catalog.surface_delta_lines(exc.delta), "error": str(exc)}
+                "delta_lines": catalog.surface_delta_lines(exc.delta) + exc.findings, "error": str(exc)}
     if isinstance(exc, _pc().PluginScanBlocked):
         result = exc.scan_result
         verdict = getattr(result, "verdict", "")
