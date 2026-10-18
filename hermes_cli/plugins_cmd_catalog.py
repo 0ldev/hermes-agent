@@ -546,6 +546,8 @@ def repin_catalog_plugin(
     *,
     interactive: bool = False,
     consent_cb=None,
+    force: bool = False,
+    scan_decision_cb=None,
 ) -> RepinResult:
     """Re-pin a catalog install to the current catalog SHA (never ``git pull``).
 
@@ -558,6 +560,8 @@ def repin_catalog_plugin(
     is a new grant. ``consent_cb(delta) -> bool`` decides before publication; absent or declined raises
     :class:`RepinConsentRequired` with the installed tree untouched. The immutable catalog pin is
     previewed separately because the PM update transaction owns and publishes its own staged clone.
+    *force* accepts the widening and the scan findings without asking; *scan_decision_cb* answers
+    the scan findings (see :func:`hermes_cli.plugins_transaction.update_plugin`).
     """
     from hermes_cli.plugins_cmd import (
         PluginOperationError,
@@ -586,7 +590,7 @@ def repin_catalog_plugin(
 
     def _consent_gate(manifest: dict, tree: Path) -> None:
         delta = surface_delta(installed_surface, plugin_surface(manifest, tree))
-        if delta and not (consent_cb is not None and consent_cb(delta)):
+        if delta and not force and not (consent_cb is not None and consent_cb(delta)):
             raise RepinConsentRequired(catalog_name, entry.sha, delta)
 
     # The catalog pin is immutable. Preview it before PM begins publication so a widened surface can
@@ -609,6 +613,8 @@ def repin_catalog_plugin(
         catalog_entry=entry,
         interactive=interactive,
         carry_user_files=lambda staged: _carry_user_files(target, staged, local),
+        force=force,
+        scan_decision_cb=scan_decision_cb,
     )
     matches = []
     for installed_name, row in _read_install_metadata().items():
@@ -648,56 +654,6 @@ def repin_catalog_plugin(
         _remove_plugin_core(target)
         warnings.append(f"Plugin renamed itself from '{target.name}' to '{installed_name}'; the old directory was removed.")
     return RepinResult(entry.sha, True, installed_name, warnings)
-
-
-def cmd_update_catalog(name: str, target: Path, sidecar: dict, console, *, interactive: bool = True) -> None:
-    from hermes_cli.plugins_cmd import (
-        PluginOperationError, _ask_yes, _declared_capabilities_from_manifest, _fail, _is_tty, _read_manifest,
-        _run_capability_consent)
-    console.print(f"[dim]Checking catalog pin for {name}...[/dim]")
-
-    def _confirm_widening(delta: dict[str, list[str]]) -> bool:
-        console.print(f"\n  [yellow]The new pin of [bold]{name}[/bold] adds:[/yellow]")
-        for line in surface_delta_lines(delta):
-            console.print(f"    {line}")
-        if not interactive or not _is_tty():
-            console.print("  [yellow]Non-interactive session: update NOT applied (fail closed). "
-                          "Re-run `hermes plugins update` in a terminal to review and confirm.[/yellow]")
-            return False
-        return _ask_yes("  Apply this update? [y/N]: ")
-
-    try:
-        result = repin_catalog_plugin(
-            target,
-            sidecar,
-            interactive=interactive,
-            consent_cb=_confirm_widening,
-        )
-    except RepinConsentRequired as exc:
-        _fail(console, f"[yellow]Update of {name} not applied:[/yellow] {exc}")
-        raise SystemExit(1)
-    except PluginOperationError as exc:
-        _fail(console, f"[red]Error:[/red] {exc}")
-        raise SystemExit(1)
-    verb = "updated to" if result.changed else "is already at catalog pin"
-    console.print(f"[green]✓[/green] Plugin [bold]{result.installed_name}[/bold] {verb} {result.sha[:8]}.")
-    for warning in result.warnings:
-        console.print(f"[yellow]⚠ {warning}[/yellow]")
-    if result.changed:
-        # PM admitted Python dependencies before publishing the replacement. Host capabilities use
-        # their separate grant store, so additions stay ungranted until the user consents here.
-        new_target = target.parent / result.installed_name
-        declared = _declared_capabilities_from_manifest(_read_manifest(new_target), result.installed_name)
-        if declared:
-            from hermes_cli.plugin_capabilities import declared_set_changed, pending_capabilities
-            if pending_capabilities(result.installed_name, declared) or declared_set_changed(result.installed_name, declared):
-                if interactive:
-                    _run_capability_consent(console, result.installed_name, declared, context="update")
-                else:
-                    console.print(
-                        f"[yellow]Plugin {result.installed_name} has new capabilities; review them with "
-                        f"`hermes plugins capabilities {result.installed_name}`.[/yellow]")
-
 
 
 # ── search / browse / info / validate ────────────────────────────────────────
