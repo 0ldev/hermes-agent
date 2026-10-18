@@ -63,7 +63,9 @@ def session(tmp_path, monkeypatch):
 @pytest.fixture
 def calls(monkeypatch):
     seen = []
-    for verb, name in (("register", "own_process_groups"), ("unregister", "release_process_groups")):
+    monkeypatch.setattr(lifecycle, "release_process_group_once_empty",
+                        lambda pgid, **kw: seen.append(("unregister", [pgid])))
+    for verb, name in (("register", "own_process_groups"),):
         monkeypatch.setattr(lifecycle, name, lambda pgids, verb=verb: seen.append((verb, sorted(pgids))))
     monkeypatch.setattr(lifecycle, "register_child", lambda pid, purpose: None)
     return seen
@@ -79,7 +81,7 @@ def test_daemon_and_chromium_groups_are_registered_once(tmp_path, session, calls
 
     assert calls == [("register", sorted([daemon.pid, chromium]))]
     lifecycle._release_owned_daemon(name)
-    assert calls[-1] == ("unregister", sorted([daemon.pid, chromium]))
+    assert sorted(calls[1:]) == [("unregister", [pgid]) for pgid in sorted([daemon.pid, chromium])]
     daemon.kill()
     daemon.wait(timeout=10)
 

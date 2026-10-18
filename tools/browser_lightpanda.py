@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from hermes_cli.process_identity import release_process_groups, spawn_owned
+from hermes_cli.process_identity import release_process_group_once_empty, spawn_owned
 
 logger = logging.getLogger(__name__)
 
@@ -216,14 +216,14 @@ def launch_lightpanda(session_name: str, *, block_private_networks: bool = False
     while True:
         rc = proc.poll()
         if rc is not None:
-            release_process_groups([proc.pid])
+            release_process_group_once_empty(proc.pid, proc=proc)
             tail = _read_log_tail(log_path)
             return None, f"lightpanda serve exited with code {rc} before {url}/json/version answered{f': {tail}' if tail else ''}"
         if _cdp_ready(url):
             break
         if time.monotonic() >= deadline:
             _terminate(proc)
-            release_process_groups([proc.pid])
+            release_process_group_once_empty(proc.pid, proc=proc)
             tail = _read_log_tail(log_path)
             detail = f" (last stderr line: {tail})" if tail else ""
             return None, f"lightpanda serve did not expose {url}/json/version within {int(_READY_TIMEOUT_S)}s{detail}"
@@ -256,7 +256,7 @@ def stop_lightpanda(session_name: str) -> None:
         except Exception:
             _terminate(server.proc)
     if server is not None:
-        release_process_groups([server.proc.pid])
+        release_process_group_once_empty(server.proc.pid, proc=server.proc)
         logger.debug("Stopped lightpanda serve for session %s", session_name)
 
 

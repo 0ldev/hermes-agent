@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Optional, Tuple
 from agent.proxy_bypass import loopback_request_kwargs
-from hermes_cli.process_identity import release_process_groups, spawn_owned
+from hermes_cli.process_identity import release_process_group_once_empty, spawn_owned
 from tools.browser_tool_origin import origin_module as _origin
 from tools import browser_tool_cloud as _cloud
 from tools import browser_tool_install as _install
@@ -32,7 +32,7 @@ def _terminate_real_profile_chrome() -> None:
     while _bt._real_profile_chrome_procs:
         proc = _bt._real_profile_chrome_procs.pop()
         _terminate(proc, what="real-profile chrome")
-        release_process_groups([proc.pid])
+        release_process_group_once_empty(proc.pid, proc=proc)
 
 
 def _cdp_http_ready(http_cdp: str) -> bool:

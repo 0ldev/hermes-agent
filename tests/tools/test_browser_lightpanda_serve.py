@@ -68,7 +68,7 @@ def owned(monkeypatch):
         return proc
 
     monkeypatch.setattr(lp, "spawn_owned", fake_spawn_owned)
-    monkeypatch.setattr(lp, "release_process_groups", lambda pgids: seen.append(("release", list(pgids))))
+    monkeypatch.setattr(lp, "release_process_group_once_empty", lambda pgid, **kw: seen.append(("release", [pgid])))
     return seen
 
 
