@@ -7,6 +7,7 @@ old format, identity-checked against the real process.
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,10 +34,13 @@ def test_a_server_left_by_a_crashed_pre_update_hermes_is_reaped_but_a_live_owner
 
     monkeypatch.setattr(lp, "_state_dir", lambda: tmp_path)
     # A bash copy keeps its own name (macOS /bin/sh re-execs). Written once: overwriting a running
-    # executable on macOS kills the processes running it.
+    # executable on macOS kills the processes running it. Resolved on PATH: NixOS has no /bin/bash.
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash on PATH")
     exe = tmp_path / "bin" / "lightpanda"
     exe.parent.mkdir()
-    exe.write_bytes(Path("/bin/bash").read_bytes())
+    exe.write_bytes(Path(bash).read_bytes())
     exe.chmod(0o755)
     orphan, kept = _legacy_lightpanda(exe, 43111), _legacy_lightpanda(exe, 43112)
     dead_owner = subprocess.Popen([sys.executable, "-c", "pass"])
