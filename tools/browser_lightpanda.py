@@ -300,11 +300,13 @@ def reap_legacy_lightpanda_records() -> int:
     is still ``lightpanda serve`` on the recorded port, with the recorded start time."""
     try:
         records = sorted(_state_dir().glob("*.json"))
-    except Exception as e:
+    except OSError as e:
         logger.debug("lightpanda state dir unavailable: %s", e)
         return 0
     if not records:
         return 0
+    import psutil
+
     from gateway.status import _pid_exists
 
     reaped = 0
@@ -316,16 +318,19 @@ def reap_legacy_lightpanda_records() -> int:
         except (OSError, ValueError):
             record_path.unlink(missing_ok=True)
             continue
-        owner_pid = record.get("owner_pid")
-        if owner_pid and int(owner_pid) != os.getpid() and _pid_exists(int(owner_pid)):
+        try:
+            owner_pid, pid = int(record.get("owner_pid") or 0), int(record.get("pid") or 0)
+        except (TypeError, ValueError):
+            record_path.unlink(missing_ok=True)
+            continue
+        if owner_pid and owner_pid != os.getpid() and _pid_exists(owner_pid):
             continue  # a live pre-update Hermes still owns it; its own cleanup (or this sweep later) ends it
-        pid = record.get("pid")
-        if pid and _is_lightpanda_process(int(pid), record.get("port"), record.get("start_time")):
+        if pid and _is_lightpanda_process(pid, record.get("port"), record.get("start_time")):
             try:
-                _tree_kill(int(pid), record.get("start_time"))
+                _tree_kill(pid, record.get("start_time"))
                 reaped += 1
                 logger.info("Reaped pre-update lightpanda serve pid %s (session %s)", pid, record_path.stem)
-            except Exception as e:
+            except (OSError, psutil.Error) as e:
                 logger.debug("legacy lightpanda kill failed for pid %s: %s", pid, e)
         record_path.unlink(missing_ok=True)
     return reaped
