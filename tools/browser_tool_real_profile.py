@@ -247,10 +247,6 @@ def _attach_agent_browser_to_real_profile(port: int, copy_dir: str) -> tuple[Opt
         return None, f"{_RP}the local browser engine (agent-browser) is not installed: {e}"
     argv = [*_session._agent_browser_argv(browser_cmd), "--session", _bt._REAL_PROFILE_SESSION,
             "--cdp", str(port), "open", "about:blank"]
-    # The session's socket dir is shared by every Hermes: only a daemon THIS command started is ours.
-    pid_file = os.path.join(_bt._socket_safe_tmpdir(), f"agent-browser-{_bt._REAL_PROFILE_SESSION}",
-                            f"{_bt._REAL_PROFILE_SESSION}.pid")
-    daemon_before = _lifecycle._read_pid_file(pid_file)
     try:
         proc = _capture_agent_browser_cli(
             argv, timeout=_bt._get_open_command_timeout(first_open=True), tag="rp-open",
@@ -263,10 +259,10 @@ def _attach_agent_browser_to_real_profile(port: int, copy_dir: str) -> tuple[Opt
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         return None, f"{_RP}the real-profile browser failed to start: {tail[-1] if tail else f'exit {proc.returncode}'}"
     # The attach daemon detaches into its own session like every agent-browser daemon, but this one
-    # never runs through _run_browser_command, so a daemon this command started is owned here: it
-    # dies with this process. One another live Hermes started is left to that Hermes.
-    if _lifecycle._read_pid_file(pid_file) != daemon_before:
-        _lifecycle._own_local_daemon(_bt._REAL_PROFILE_SESSION)
+    # never runs through _run_browser_command. The session is shared by every Hermes: _own_local_daemon
+    # owns the daemon only when its spawn tag names this process, so one another live Hermes started
+    # (even concurrently) stays that Hermes's.
+    _lifecycle._own_local_daemon(_bt._REAL_PROFILE_SESSION)
     cdp = _agent_browser_get_cdp(_bt._REAL_PROFILE_SESSION)
     our_port = _read_devtools_port(copy_dir)
     if our_port is not None and (m := re.search(r":(\d+)", cdp or "")) and m.group(1) != our_port:

@@ -193,34 +193,24 @@ def test_a_sigkilled_owner_takes_its_daemon_tree_and_a_live_owner_keeps_its_own(
         f"the {family} daemon of a still-live owner was killed")
 
 
-@pytest.mark.parametrize("started_here", [True, False])
-def test_the_real_profile_attach_daemon_is_owned_only_when_this_attach_started_it(tmp_path, monkeypatch, started_here):
-    """The ``hermes-real-profile`` session's socket dir is shared by every Hermes: a daemon an earlier,
-    still-live Hermes started must stay that Hermes's, never this one's."""
+def test_the_real_profile_attach_hands_ownership_to_the_spawn_tag_check(tmp_path, monkeypatch):
+    """The ``hermes-real-profile`` session is shared by every Hermes. Whether this attach owns its
+    daemon is decided by _own_local_daemon's spawn-tag check (test_browser_owned_daemon), not by a
+    before/after pid-file diff, which two concurrent attaches would both pass."""
     import subprocess as sp
 
     import tools.browser_tool as bt
     from tools import browser_tool_install as install
     from tools import browser_tool_real_profile as rp
 
-    socket_dir = tmp_path / f"agent-browser-{bt._REAL_PROFILE_SESSION}"
-    socket_dir.mkdir()
-    pid_file = socket_dir / f"{bt._REAL_PROFILE_SESSION}.pid"
-    pid_file.write_text("1111", encoding="utf-8")
     owned = []
-
-    def fake_cli(argv, timeout, tag):
-        if started_here:
-            pid_file.write_text("2222", encoding="utf-8")  # the CLI forked a fresh daemon
-        return sp.CompletedProcess(argv, 0, stdout="", stderr="")
-
     monkeypatch.setattr(bt, "_socket_safe_tmpdir", lambda: str(tmp_path))
     monkeypatch.setattr(install, "_find_agent_browser", lambda: "agent-browser")
-    monkeypatch.setattr(rp, "_capture_agent_browser_cli", fake_cli)
+    monkeypatch.setattr(rp, "_capture_agent_browser_cli", lambda argv, timeout, tag: sp.CompletedProcess(argv, 0, "", ""))
     monkeypatch.setattr(rp, "_agent_browser_get_cdp", lambda name: "http://127.0.0.1:45678")
     monkeypatch.setattr(rp._lifecycle, "_own_local_daemon", owned.append)
 
     cdp, err = rp._attach_agent_browser_to_real_profile(45678, str(tmp_path / "copy"))
 
     assert (cdp, err) == ("http://127.0.0.1:45678", None)
-    assert owned == ([bt._REAL_PROFILE_SESSION] if started_here else [])
+    assert owned == [bt._REAL_PROFILE_SESSION]

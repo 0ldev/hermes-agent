@@ -31,11 +31,12 @@ time.sleep(300)
 '''
 
 
-def _spawn_daemon(tmp_path, socket_dir: Path, session: str):
+def _spawn_daemon(tmp_path, socket_dir: Path, session: str, env=None):
+    env = {**os.environ, **process_identity.spawn_env("test")} if env is None else env
     script = tmp_path / "agent-browser"
     script.write_text(_DAEMON, encoding="utf-8")
     proc = subprocess.Popen([sys.executable, str(script), str(socket_dir)], stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, text=True, start_new_session=True)
+                            stdout=subprocess.PIPE, text=True, start_new_session=True, env=env)
     chromium = int(proc.stdout.readline())
     deadline = time.monotonic() + 10
     while os.getpgid(chromium) != chromium and time.monotonic() < deadline:  # windows-footgun: ok — posix-marked
@@ -108,11 +109,13 @@ def test_a_sigkilled_owner_takes_daemon_and_chromium_with_it(tmp_path):
     socket_dir.mkdir()
     (tmp_path / "agent-browser").write_text(_DAEMON, encoding="utf-8")
     owner_src = (
-        "import subprocess, sys, time\n"
+        "import os, subprocess, sys, time\n"
         "from tools import browser_tool_lifecycle as lc\n"
+        "from hermes_cli.process_identity import spawn_env\n"
         f"lc._bt._socket_safe_tmpdir = lambda: {str(tmp_path)!r}\n"
         f"d = subprocess.Popen([sys.executable, {str(tmp_path / 'agent-browser')!r}, {str(socket_dir)!r}],"
-        " stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, start_new_session=True)\n"
+        " stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, start_new_session=True,"
+        " env={**os.environ, **spawn_env('agent-browser-daemon')})\n"
         "c = int(d.stdout.readline())\n"
         "import os\n"
         "while os.getpgid(c) != c: time.sleep(0.02)\n"  # windows-footgun: ok — posix-marked
@@ -150,3 +153,26 @@ def test_a_sigkilled_owner_takes_daemon_and_chromium_with_it(tmp_path):
             owner.kill()
         owner.wait(timeout=10)
         process_identity._supervised_pgids.clear()
+
+
+def test_a_daemon_another_live_hermes_started_is_never_registered(tmp_path, session, calls):
+    """Two Hermes processes can share a session (the real-profile attach session always is shared):
+    a verified daemon in that session belongs to whoever started it, never to every Hermes that
+    reads its pid file. Killing this process must not take another live Hermes's browser."""
+    name, socket_dir, procs = session
+    other_hermes = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    try:
+        foreign_tag = process_identity.spawn_env("agent-browser-daemon")
+        foreign_tag[process_identity.SPAWN_ENV_VAR] = foreign_tag[process_identity.SPAWN_ENV_VAR].replace(
+            f":{os.getpid()}:", f":{other_hermes.pid}:")
+        daemon, chromium = _spawn_daemon(tmp_path, socket_dir, name, env={**os.environ, **foreign_tag})
+        procs += [daemon.pid, chromium]
+
+        lifecycle._own_local_daemon(name)
+
+        assert calls == []
+        daemon.kill()
+        daemon.wait(timeout=10)
+    finally:
+        other_hermes.stdin.close()
+        other_hermes.wait(timeout=10)

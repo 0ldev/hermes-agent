@@ -14,7 +14,8 @@ from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from hermes_cli.process_identity import own_process_groups, register_child, release_process_group_once_empty
+from hermes_cli.process_identity import (
+    own_process_groups, register_child, release_process_group_once_empty, spawned_by_this_process)
 from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
@@ -658,6 +659,8 @@ def _own_local_daemon(session_name: str) -> None:
             return
         if not _verify_reapable_browser_daemon(daemon_pid, socket_dir, session_name):
             return
+        if not spawned_by_this_process(daemon_pid):
+            return  # started by another Hermes sharing this session: that Hermes owns it
         groups = {daemon_pid} | {os.getpgid(c.pid) for c in psutil.Process(daemon_pid).children()}  # windows-footgun: ok — posix-only
     except (OSError, ValueError, psutil.Error) as exc:
         _bt.logger.debug("No agent-browser daemon to supervise for %s: %s", session_name, exc)

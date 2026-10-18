@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
+from hermes_cli.process_identity import spawn_env
 from hermes_constants import hermes_home_key
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
@@ -189,6 +190,9 @@ def _agent_browser_command_env(socket_dir: str) -> dict[str, str]:
     if executable:
         env["AGENT_BROWSER_EXECUTABLE_PATH"] = executable
     env["AGENT_BROWSER_SOCKET_DIR"] = socket_dir
+    # The daemon a command forks inherits this tag: it is how _own_local_daemon tells a daemon this
+    # process started from one another Hermes started in a shared session.
+    env.update(spawn_env("agent-browser-daemon"))
     if "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in env:
         env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = str(_daemon_idle_timeout_seconds() * 1000)
     return env
