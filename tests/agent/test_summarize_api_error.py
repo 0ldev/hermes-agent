@@ -93,3 +93,25 @@ def test_unread_streaming_response_does_not_crash_and_falls_back_to_exception_me
     summary = AIAgent._summarize_api_error(err)
     assert "HTTP 429" in summary
     assert "Gemini HTTP 429: quota exceeded" in summary
+
+
+def test_provider_request_id_reaches_failure_line_but_not_summary():
+    """The provider's request id (OpenAI ``x-request-id``, Anthropic ``request-id``) is named on the
+    user-facing failure line so a support ticket can cite it, and stays out of the summary that cron
+    incident signing hashes (a per-request id would mint a new incident per failure)."""
+    from agent.api_error_summary import request_id_suffix
+
+    for header in ("x-request-id", "request-id"):
+        response = httpx.Response(
+            500, headers={header: "req_abc123"}, json={"error": {"message": "boom"}},
+            request=httpx.Request("POST", "https://api.example.test/v1/chat/completions"),
+        )
+        err = Exception("boom")
+        err.status_code, err.response, err.body = 500, response, {"error": {"message": "boom"}}
+        assert request_id_suffix(err) == " (provider request id: req_abc123)"
+        assert "req_abc123" not in AIAgent._summarize_api_error(err)
+
+    wrapped = RuntimeError("retry exhausted")
+    wrapped.__cause__ = err
+    assert "req_abc123" in request_id_suffix(wrapped)
+    assert request_id_suffix(Exception("no response")) == ""
