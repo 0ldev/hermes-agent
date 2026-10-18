@@ -8,12 +8,12 @@ per-process owner-death supervisor. These tests use a stand-in daemon with the s
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
 
 from hermes_cli import process_identity
+from tests.waiting import wait_until
 from tools import browser_tool_lifecycle as lifecycle
 
 # The stand-in Chromium reparents to init once its daemon is killed; cleaning it up leaves this
@@ -38,9 +38,8 @@ def _spawn_daemon(tmp_path, socket_dir: Path, session: str, env=None):
     proc = subprocess.Popen([sys.executable, str(script), str(socket_dir)], stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, text=True, start_new_session=True, env=env)
     chromium = int(proc.stdout.readline())
-    deadline = time.monotonic() + 10
-    while os.getpgid(chromium) != chromium and time.monotonic() < deadline:  # windows-footgun: ok — posix-marked
-        time.sleep(0.02)
+    wait_until(lambda: os.getpgid(chromium) == chromium, timeout=10,  # windows-footgun: ok — posix-marked
+               what="the stand-in Chromium to leave for its own group")
     (socket_dir / f"{session}.pid").write_text(str(proc.pid), encoding="utf-8")
     return proc, chromium
 
@@ -133,16 +132,18 @@ def test_a_sigkilled_owner_takes_daemon_and_chromium_with_it(tmp_path):
         assert len(groups) == 2
         owner.kill()
         owner.wait(timeout=10)
-        deadline = time.monotonic() + 15
-        alive = list(groups)
-        while alive and time.monotonic() < deadline:
-            for g in list(alive):
+        def _alive_groups():
+            alive = []
+            for g in groups:
                 try:
                     os.killpg(g, 0)  # windows-footgun: ok — posix-marked
+                    alive.append(g)
                 except ProcessLookupError:
-                    alive.remove(g)
-            time.sleep(0.05)
-        assert not alive, f"groups outlived kill -9 of their owner: {alive}"
+                    pass
+            return alive
+
+        wait_until(lambda: not _alive_groups(), timeout=15,
+                   what="the daemon and Chromium groups to die with their kill -9'd owner")
     finally:
         for g in groups:
             try:
