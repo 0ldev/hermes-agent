@@ -7,6 +7,7 @@ import type { ConfigFullResponse, ConfigMtimeResponse, ReloadMcpResponse } from 
 import { syncTuiLocale } from '../i18n/loader.js'
 import { t } from '../i18n/runtime.js'
 import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey, parseVoiceRecordKey } from '../lib/platform.js'
+import { $programStatusEnabled } from '../lib/programStatus.js'
 import { asRpcResult } from '../lib/rpc.js'
 
 import { applyConfiguredTuiTheme } from './createGatewayEventHandler.js'
@@ -298,6 +299,7 @@ export const applyDisplay = (
   setBell(!!d.bell_on_complete)
 
   setBellOnPrompt?.(!!d.bell_on_prompt)
+  $programStatusEnabled.set(d.program_status !== false)
 
   applyConfiguredTuiTheme(d.tui_theme)
 

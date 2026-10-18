@@ -10,6 +10,7 @@ import {
 import type { SessionInterruptResponse } from '../gatewayTypes.js'
 import { t } from '../i18n/runtime.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
+import { $turnOutcome, completionOutcome } from '../lib/programStatus.js'
 import { hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import {
@@ -656,6 +657,7 @@ class TurnController {
     // A failed turn discards the whole unsealed turn (flushed segments AND the
     // streaming tail) — unlike recordMessageComplete, which must keep the tail
     // (#61520), and interruptTurn, which preserves it as `partial`.
+    $turnOutcome.set('error')
     this.idle()
     this.clearReasoning()
     this.clearStatusTimer()
@@ -775,6 +777,8 @@ class TurnController {
       void this.persistSpawnTree?.(finishedSubagents, sessionId)
     }
 
+    // Before idle() drops busy, so the terminal reads done/error, never a passing idle.
+    $turnOutcome.set(completionOutcome(wasInterrupted, payload))
     this.idle()
     this.clearReasoning()
     this.turnTools = []
@@ -1069,6 +1073,7 @@ class TurnController {
   }
 
   startMessage() {
+    $turnOutcome.set(null)
     this.endReasoningPhase()
     this.clearReasoning()
     this.activeTools = []
