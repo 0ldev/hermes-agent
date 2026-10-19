@@ -5463,7 +5463,8 @@ function fetchJson(url, token, options: any = {}) {
                 reject(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
               }
             }))
-          }
+          },
+          Boolean(options.remoteBackend)
         )
 
         req.on('error', reject)
@@ -15457,7 +15458,8 @@ async function fetchJsonForBackend(
       method: opts.method,
       body: opts.body,
       timeoutMs: opts.timeoutMs,
-      headers: descriptor.headers
+      headers: descriptor.headers,
+      remoteBackend: descriptor.mode === 'remote'
     }
 
     return requestWithOauthFallback(descriptor.baseUrl, {
@@ -15473,6 +15475,8 @@ async function fetchJsonForBackend(
     upload: opts.upload,
     timeoutMs: opts.timeoutMs,
     headers: descriptor.headers,
+    // SSH backends are dialled through a loopback port forward; the descriptor knows they are remote.
+    remoteBackend: descriptor.mode === 'remote',
     gatewayDescriptor: descriptor.gatewayEndpoint ? descriptor : undefined
   })
 }
