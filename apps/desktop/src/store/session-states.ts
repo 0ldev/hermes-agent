@@ -34,7 +34,6 @@ import {
 import { resolveRememberedActivePane, workspaceScopeKey } from '@/components/pane-shell/workspace-scope'
 import type { WorkspaceMode } from '@/contrib/types'
 import { finalizeInterruptedMessages, sealOpenToolParts } from '@/lib/chat-messages'
-import { isMessagingSource } from '@/lib/session-source'
 import { tileFocusStampOnFocusChange } from '@/lib/session-timer-since'
 import { stableArray } from '@/lib/stable-array'
 import { readJson, writeJson } from '@/lib/storage'
@@ -94,6 +93,7 @@ import {
   type SessionOwnerScope,
   type SessionProfileRoute
 } from './session-request-router'
+import { focusedSessionRow, isExternalMessagingSession } from './session-row-lookup'
 import { ackStoredSessionId, markSessionUnreadFinished } from './session-unread'
 import { migrateTranscriptTailsForProfile } from './transcript-tail-cache'
 import { isBrowserWindow, isSecondaryWindow } from './windows'
@@ -764,13 +764,7 @@ function handleTransition(previous: ClientSessionState | null, next: ClientSessi
 
 /** Mark a completed turn unread unless the user is already looking at it. */
 function lightUnreadCompletion(storedId: string, runtimeId?: string) {
-  const messagingRow = [...$sessions.get(), ...$cronSessions.get(), ...$messagingSessions.get()].find(session =>
-    sessionMatchesStoredId(session, storedId)
-  )
-
-  // Messaging conversations deliver their own completion to their originating
-  // platform. A Desktop observer is not an unread recipient of that delivery.
-  if (isMessagingSource(messagingRow?.source)) {
+  if (isExternalMessagingSession(storedId)) {
     return
   }
 
@@ -2977,24 +2971,6 @@ export const $focusedRuntimeId = computed(
 export const $focusedSessionState = computed([$focusedRuntimeId, $sessionStates], (runtimeId, states) =>
   runtimeId ? states[runtimeId] : undefined
 )
-
-/** The best cached row for a stored session id, across every slice the sidebar
- *  has loaded (#76535): the owner-lookup rows (recents + cron + messaging +
- *  unlisted-draft/hidden stubs) and the project tree (a tile's session is
- *  often older than the paginated recents page, so the tree is the only
- *  loaded copy). Never a by-id fetch — a computed must stay synchronous. */
-function focusedSessionRow(storedSessionId: string): SessionInfo | undefined {
-  return (
-    ownerLookupSessionRows().find(s => sessionMatchesStoredId(s, storedSessionId)) ??
-    $projectTree
-      .get()
-      .flatMap(project => [
-        ...(project.previewSessions ?? []),
-        ...project.repos.flatMap(repo => repo.groups.flatMap(group => group.sessions))
-      ])
-      .find(s => sessionMatchesStoredId(s, storedSessionId))
-  )
-}
 
 /** The workspace CWD of the currently focused session (the focused tile's cwd,
  *  else the primary session's confirmed workspace cwd, with fallback to historical session cwd). */
