@@ -95,3 +95,30 @@ def test_stored_picker_never_offers_messaging_rows_to_a_non_native_transport(tmp
         assert env.lane_sid not in env.cold.sessions  # listing never mounts
 
     asyncio.run(probe())
+
+
+def test_stored_picker_lists_a_compressed_messaging_lane_under_its_root(tmp_path):
+    """A messaging lane that compressed once is listed by its lineage root, the id session.resume
+    mounts (list_sessions_rich projects the root onto its tip, so ``row['id']`` is the tip)."""
+    async def probe():
+        from gateway.session_authority import initialize_session_authority
+        from gateway.session_controls import AuthorityConnection
+        from tests.gateway.test_authority_cold_route_recovery import _Runner, _cold, _source
+        from tests.gateway.test_messaging_control_read import _compressed_lane
+        root, _ = await _compressed_lane(tmp_path)
+        warm2 = await initialize_session_authority(_Runner(tmp_path), profile_id='fixture', instance_id='warm2')
+        plain = warm2.register(_source('weixin', chat_id='wx-2')).session_id
+        warm2.db.append_message(plain, 'user', 'hello')
+        cold = await _cold(tmp_path)
+        native = AuthorityConnection(cold.authority, object(), {'provider': 'local', 'user_id': 'native',
+            'profile_id': 'fixture', 'instance_id': 'cold'}, operator=True)
+        stored = await _call(native, 'session.list', scope='stored', limit=200)
+        assert 'result' in stored, stored
+        rows = {r['id']: r for r in stored['result']['sessions']}
+        assert plain in rows, rows  # control: an uncompressed lane
+        assert root in rows and 'seg-1' not in rows, rows
+        assert rows[root]['session_id'] == root
+        resumed = await _call(native, 'session.resume', session_id=root)
+        assert 'result' in resumed, resumed
+
+    asyncio.run(probe())

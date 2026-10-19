@@ -79,11 +79,15 @@ def stored_picker_sessions(authority, actor, *, limit, include_hidden=False):
 
 def _messaging_row(authority, row, sid, tip):
     """The picker row of a cold messaging lineage ``session.resume`` mounts; None when it is already
-    live (the live feed lists it) or is not one this profile's route recovery would mount."""
+    live (the live feed lists it) or is not one this profile's route recovery would mount.
+
+    ``list_sessions_rich`` projects a compressed lineage onto its tip, so ``row['id']`` is the tip;
+    the lane is owned, mounted and resumed by its lineage root (``messaging_owner_ref``)."""
     from gateway.session_route_recovery import routed_row_platform
-    if row['id'] in authority.sessions or routed_row_platform(authority, authority.db.get_session(row['id'])) is None:
+    root = row.get('_lineage_root_id') or row['id']
+    if root in authority.sessions or routed_row_platform(authority, authority.db.get_session(root)) is None:
         return None
-    return {'id': row['id'], 'session_id': row['id'], 'resolved_id': row['id'],
+    return {'id': root, 'session_id': root, 'resolved_id': root,
             'title': tip.get('title') or row.get('title') or '', 'source': row['source'],
             'started_at': row.get('started_at'), 'message_count': row.get('message_count', 0),
             'model': tip.get('model'), 'running': False}
