@@ -2190,12 +2190,25 @@ class TestInputLengthOverflowWordings:
     """DeepInfra and HF TGI word a context overflow without any 'input token(s)' / 'context length'
     phrase (port of anomalyco/opencode#52132, #52133)."""
 
-    @pytest.mark.parametrize("message", [
-        'Error code: 400 - {"detail":{"error":"requested input length 135000 exceeds maximum input length 131072"}}',
-        'Error code: 400 - {"error":{"message":"Input validation error: `inputs` tokens + `max_new_tokens` must '
-        'be <= 131073. Given: 140000 `inputs` tokens and 4096 `max_new_tokens`","type":"invalid_request_error"}}',
+    @pytest.mark.parametrize("status,message", [
+        (400, 'Error code: 400 - {"detail":{"error":"requested input length 135000 exceeds maximum input length 131072"}}'),
+        (400, 'Error code: 400 - {"error":{"message":"Input validation error: `inputs` tokens + `max_new_tokens` must '
+              'be <= 131073. Given: 140000 `inputs` tokens and 4096 `max_new_tokens`","type":"invalid_request_error"}}'),
+        # TGI/TEI answer validation errors with 422 (openclaw#158161).
+        (422, 'Input validation error: `inputs` must have less than 4096 tokens. Given: 5000'),
+        (422, 'Input validation error: `inputs` tokens + `max_new_tokens` must be <= 16000. Given: 220616 `inputs` tokens'),
+        # DashScope / Model Studio (openclaw#171712).
+        (400, '<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 129024]'),
     ])
-    def test_400_input_length_rejection_compresses(self, message):
-        result = classify_api_error(MockAPIError(message, status_code=400), provider="custom")
+    def test_input_length_rejection_compresses(self, status, message):
+        result = classify_api_error(MockAPIError(message, status_code=status), provider="custom")
         assert result.reason == FailoverReason.context_overflow
         assert result.should_compress is True
+
+    @pytest.mark.parametrize("status,message", [
+        (422, 'Input validation error: `temperature` must be strictly positive'),
+        (400, '<400> InvalidParameter: Range of top_p should be (0.0, 1.0]'),
+    ])
+    def test_sibling_validation_rejections_stay_format_errors(self, status, message):
+        result = classify_api_error(MockAPIError(message, status_code=status), provider="custom")
+        assert result.reason == FailoverReason.format_error

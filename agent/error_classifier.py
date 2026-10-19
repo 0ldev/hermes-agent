@@ -247,6 +247,11 @@ _MEMORY_CEILING_ERROR_CODES = frozenset({
     "prefill_memory_exceeded", "prefill_memory_aborted", "omlx_prefill_memory_exceeded",
 })
 
+# HF Text Generation Inference / TEI overflow wordings. Plural "inputs" dodges every "input token"
+# entry below (opencode#52133, openclaw#158161). TGI's router maps validation errors to HTTP 422
+# (sibling 422 rules are temperature/top_p/stop), so the 422 handler checks these too.
+_TGI_OVERFLOW_PATTERNS = ("`inputs` tokens + `max_new_tokens`", "`inputs` must have less than")
+
 # Bare "max_tokens" is load-bearing: the output-cap-retry path keys off it;
 # empty-response advisories mentioning it are intercepted earlier. Groups:
 # generic; vLLM; Ollama; llama.cpp; Chinese; Z.AI (1210); Bedrock; Together.
@@ -265,9 +270,10 @@ _CONTEXT_OVERFLOW_PATTERNS = (
     "maximum allowed input length",
     # DeepInfra: "requested input length 135000 exceeds maximum input length 131072" (opencode#52132).
     "exceeds maximum input length",
-    # HF Text Generation Inference (Together et al.): "`inputs` tokens + `max_new_tokens` must be
-    # <= 131073" — plural "inputs" dodges every "input token" entry above (opencode#52133).
-    "`inputs` tokens + `max_new_tokens`",
+    *_TGI_OVERFLOW_PATTERNS,
+    # DashScope / Model Studio: "Range of input length should be [1, 129024]" — `max_tokens` range errors
+    # share the "Range of … should be" frame, so the pattern names `input length` (openclaw#171712).
+    "range of input length should be",
 )
 
 # Invalid-key rejections some providers return as HTTP 400 instead of 401: xAI's generic
@@ -1231,6 +1237,8 @@ def _classify_image_tool_422(c: _Ctx) -> Verdict:
     """422: pydantic relays report the same content-field shapes as 400 (#104731, #112473)."""
     if _oversized_message_content_rejection(c.body):
         return _V_IMAGE_TOO_LARGE
+    if any(p in c.msg for p in _TGI_OVERFLOW_PATTERNS):
+        return _V_CONTEXT_OVERFLOW
     return _first_match(c.msg, _IMAGE_TOOL_RULES) or _V_FORMAT_ERROR
 
 
