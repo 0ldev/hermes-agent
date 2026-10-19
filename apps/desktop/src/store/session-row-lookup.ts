@@ -24,9 +24,9 @@ export function focusedSessionRow(storedSessionId: string): SessionInfo | undefi
 
 /** A loaded row for *storedId* comes from a messaging platform (RT-18, #139017).
  *  Those conversations deliver their own completion to their originating
- *  platform, so a Desktop observer is not an unread recipient of it. */
+ *  platform, so a Desktop observer is not an unread recipient of it. Looks in
+ *  every loaded slice, project tree included: the tree lists messaging rows
+ *  and is the only loaded copy of one older than the messaging page. */
 export function isExternalMessagingSession(storedId: string): boolean {
-  const row = ownerLookupSessionRows().find(session => sessionMatchesStoredId(session, storedId))
-
-  return isMessagingSource(row?.source)
+  return isMessagingSource(focusedSessionRow(storedId)?.source)
 }
