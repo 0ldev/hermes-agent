@@ -6530,49 +6530,37 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         event.text = "\n".join(parts)
         await self.handle_message(self._apply_telegram_group_observe_attribution(event))
 
-    # -- Text message aggregation (handles Telegram client-side splits) --
-
+    @staticmethod
+    def _contact_text(contact: Any) -> Optional[str]:
+        """Shared contact card -> model-facing text, or None when the card carries nothing."""
+        name = " ".join(filter(None, (getattr(contact, "first_name", None), getattr(contact, "last_name", None))))
+        fields = [("Name", name), ("Phone", getattr(contact, "phone_number", None)),
+                  ("Telegram user ID", getattr(contact, "user_id", None))]
+        lines = [f"{label}: {value}" for label, value in fields if value]
+        vcard = (getattr(contact, "vcard", None) or "").strip()
+        if vcard:
+            lines.append("vCard:\n" + vcard[:4000])
+        return "\n".join(["[Shared contact card]", *lines]) if lines else None
 
     async def _handle_contact_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle incoming contact card messages."""
+        """A shared contact card has no text or media, so without its own handler it never reached the agent."""
         msg = self._effective_update_message(update)
         if not msg:
             return
         if not self._is_user_authorized_from_message(msg):
-            logger.warning(
-                "[Telegram] Blocked unauthorized user %s in chat %s",
-                getattr(getattr(msg, "from_user", None), "id", None),
-                getattr(getattr(msg, "chat", None), "id", None),
-            )
+            self._log_blocked_user(msg)
             return
-        if not self._should_process_message(msg):
-            if self._should_observe_unmentioned_group_message(msg):
-                self._observe_unmentioned_group_message(msg, MessageType.CONTACT, update_id=update.update_id)
+        if not self._gate_or_observe(msg, update, MessageType.CONTACT):
             return
-
-        contact = getattr(msg, "contact", None)
-        if not contact:
+        text = self._contact_text(getattr(msg, "contact", None))
+        if not text:
             return
-
-        parts = ["[The user shared a contact.]"]
-        first_name = getattr(contact, "first_name", None)
-        last_name = getattr(contact, "last_name", None)
-        phone = getattr(contact, "phone_number", None)
-        vcard = getattr(contact, "vcard", None)
-        if first_name:
-            parts.append(f"First name: {first_name}")
-        if last_name:
-            parts.append(f"Last name: {last_name}")
-        if phone:
-            parts.append(f"Phone: {phone}")
-        if vcard:
-            parts.append("VCard:")
-            parts.append(vcard)
-
         event = self._build_message_event(msg, MessageType.CONTACT, update_id=update.update_id)
-        event.text = "\n".join(parts)
-        event = self._apply_telegram_group_observe_attribution(event)
-        await self.handle_message(event)
+        event.text = text
+        await self.handle_message(self._apply_telegram_group_observe_attribution(event))
+
+    # -- Text message aggregation (handles Telegram client-side splits) --
+
     def _text_batch_key(self, event: MessageEvent) -> str:
         """Session-scoped batching key; topic recovery first so DM-topic batches coalesce on the recovered lane."""
         self._apply_topic_recovery(event)
@@ -7092,6 +7080,8 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         reply_to_text = message.reply_to_message.text or message.reply_to_message.caption or None
         if not reply_to_text:
             reply_to_text = self._extract_rich_reply_text(message.reply_to_message)
+        if not reply_to_text and getattr(message.reply_to_message, "contact", None):
+            reply_to_text = self._contact_text(message.reply_to_message.contact)
         if not reply_to_text:
             try:
                 from gateway import rich_sent_store
