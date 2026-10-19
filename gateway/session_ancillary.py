@@ -204,12 +204,12 @@ async def read(connection, ref, params, *, kind):
     live = authority.sessions[ref.session_id]
     with live.event_stream.lock:
         if kind == 'control':
-            # Control cards belong to local GUI/CLI conversations. A messaging
-            # route is deliberately reused after /new, but Desktop can still
-            # inspect an empty control projection without borrowing
-            # the replacement conversation's live objects.
+            # A messaging route is reused after /new and names a compression continuation, so the
+            # route check would refuse a viewer of the conversation itself (RT-18). Control is a read
+            # of the conversation's own persisted goal/loop/heartbeat, which the lane keys on its
+            # physical transcript (gateway/run_goals.py); no live object of the route is touched.
             if live.source.platform != Platform.LOCAL:
-                return {'control': control_snapshot(authority, ref, persisted=False)}
+                return {'control': control_snapshot(authority, ref)}
             _require_current_route(authority, ref)
             return {'control': control_snapshot(authority, ref)}
         _require_current_route(authority, ref)
@@ -392,7 +392,17 @@ def physical_target(authority, ref):
     return ref.session_id
 
 
-def control_snapshot(authority, ref, *, persisted=True):
+def _control_target(authority, ref):
+    """The transcript whose goal/loop/heartbeat a session's cards show. A messaging lane keys them on
+    its routing entry's session (``GatewayRunner._manager_for_event``), its compression tip, while the
+    viewer mounts the lineage root; a local session keys them on its receipt's target."""
+    from gateway.config import Platform
+    if authority.sessions[ref.session_id].source.platform == Platform.LOCAL:
+        return physical_target(authority, ref)
+    return authority.physical_target(ref)
+
+
+def control_snapshot(authority, ref):
     from hermes_cli.goals import GoalState
     from hermes_cli.loops import LoopState
     from hermes_cli.heartbeat import HeartbeatState
@@ -402,15 +412,14 @@ def control_snapshot(authority, ref, *, persisted=True):
         _safe_goal_snapshot, _safe_loop_snapshot, _safe_heartbeat_snapshot,
         _snapshot_revision, _snapshot_updated_at,
     )
-    states = [None, None, None]
-    if persisted:
-        target = physical_target(authority, ref)
-        for index, (kind, cls) in enumerate([('goal', GoalState), ('loop', LoopState), ('heartbeat', HeartbeatState)]):
-            raw = authority.db.get_meta(kind + ':' + target)
-            try:
-                states[index] = cls.from_json(raw) if raw else None
-            except (ValueError, TypeError, AttributeError) as exc:
-                raise RuntimeStoreError('storage_unavailable') from exc
+    target = _control_target(authority, ref)
+    states = []
+    for kind, cls in [('goal', GoalState), ('loop', LoopState), ('heartbeat', HeartbeatState)]:
+        raw = authority.db.get_meta(kind + ':' + target)
+        try:
+            states.append(cls.from_json(raw) if raw else None)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise RuntimeStoreError('storage_unavailable') from exc
     goal_state, loop_state, heartbeat_state = states
     goal = _safe_goal_snapshot(goal_state)
     # Project the persisted barrier, not GoalManager.is_waiting(), which clears

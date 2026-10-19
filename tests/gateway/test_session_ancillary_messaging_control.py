@@ -5,7 +5,7 @@ import threading
 from types import SimpleNamespace
 
 
-def test_messaging_control_read_returns_empty_snapshot_without_current_route(monkeypatch):
+def test_messaging_control_read_reads_the_lanes_controls_without_a_route_check(monkeypatch):
     from gateway.config import Platform
     from gateway.session import SessionSource
     import gateway.session_ancillary as ancillary
@@ -17,10 +17,14 @@ def test_messaging_control_read_returns_empty_snapshot_without_current_route(mon
         source=SessionSource(Platform.WEIXIN, 'fixture-wechat'),
     )
 
-    def metadata_read(_key):
-        raise AssertionError('a messaging control read must not inspect persisted local controls')
+    reads = []
 
-    authority = SimpleNamespace(db=SimpleNamespace(get_meta=metadata_read), sessions={session_id: live})
+    def metadata_read(key):
+        reads.append(key)
+
+    # The lane keys its controls on its current transcript (the compression tip), not the mount.
+    authority = SimpleNamespace(db=SimpleNamespace(get_meta=metadata_read), sessions={session_id: live},
+                                physical_target=lambda ref: 'wechat-tip')
     connection = SimpleNamespace(authority=authority)
     ref = SimpleNamespace(session_id=session_id)
 
@@ -37,3 +41,4 @@ def test_messaging_control_read_returns_empty_snapshot_without_current_route(mon
     assert result['control']['loop'] is None
     assert result['control']['heartbeat'] is None
     assert isinstance(result['control']['revision'], str)
+    assert reads == ['goal:wechat-tip', 'loop:wechat-tip', 'heartbeat:wechat-tip']
