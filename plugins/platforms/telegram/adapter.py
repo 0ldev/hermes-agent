@@ -6447,12 +6447,13 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
             level, "[Telegram] Blocked %s %s in chat %s", what, getattr(getattr(msg, "from_user", None), "id", None),
             getattr(getattr(msg, "chat", None), "id", None))
 
-    def _gate_or_observe(self, msg, update, msg_type: MessageType) -> bool:
-        """Group trigger gate; observes unmentioned chatter when configured. True = proceed."""
+    def _gate_or_observe(self, msg, update, msg_type: MessageType, event: Optional[MessageEvent] = None) -> bool:
+        """Group trigger gate; observes unmentioned chatter when configured. True = proceed. ``event``: a
+        prebuilt event whose text is not the message's text/caption (a contact card), so observation keeps it."""
         if self._should_process_message(msg):
             return True
         if self._should_observe_unmentioned_group_message(msg):
-            self._observe_unmentioned_group_message(msg, msg_type, update_id=update.update_id)
+            self._observe_unmentioned_group_message(msg, msg_type, update_id=update.update_id, event=event)
         return False
 
     async def _build_triggered_event(self, msg, update, msg_type: MessageType) -> MessageEvent:
@@ -6550,13 +6551,13 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         if not self._is_user_authorized_from_message(msg):
             self._log_blocked_user(msg)
             return
-        if not self._gate_or_observe(msg, update, MessageType.CONTACT):
-            return
         text = self._contact_text(getattr(msg, "contact", None))
         if not text:
             return
         event = self._build_message_event(msg, MessageType.CONTACT, update_id=update.update_id)
         event.text = text
+        if not self._gate_or_observe(msg, update, MessageType.CONTACT, event=event):
+            return
         await self.handle_message(self._apply_telegram_group_observe_attribution(event))
 
     # -- Text message aggregation (handles Telegram client-side splits) --

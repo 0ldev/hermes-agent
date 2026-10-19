@@ -766,6 +766,25 @@ def test_shared_contact_card_reaches_the_agent_with_its_details():
     asyncio.run(_run())
 
 
+def test_unmentioned_contact_card_is_observed_with_its_details():
+    async def _run():
+        adapter = _make_adapter(require_mention=True, group_allowed_chats=["-100"],
+                                observe_unmentioned_group_messages=True)
+        adapter.handle_message = AsyncMock()
+        store = _FakeSessionStore()
+        adapter._session_store = store
+        card = SimpleNamespace(first_name="Ada", last_name=None, phone_number="+15550001234", user_id=None, vcard=None)
+        update = SimpleNamespace(update_id=2004, message=_contact_message(contact=card), effective_message=None)
+
+        await adapter._handle_contact_message(update, SimpleNamespace())
+
+        adapter.handle_message.assert_not_awaited()
+        (_sid, message, _skip), = store.messages
+        assert message["observed"] is True and "+15550001234" in message["content"]
+
+    asyncio.run(_run())
+
+
 def test_reply_to_a_contact_card_keeps_its_details_as_context():
     adapter = _make_adapter()
     card = SimpleNamespace(first_name="Ada", last_name=None, phone_number="+15550001234", user_id=None, vcard=None)
