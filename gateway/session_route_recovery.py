@@ -89,21 +89,32 @@ def _row_entry(row, platform, route, profile):
                         transport_profile=row.get('transport_profile'))
 
 
+def routed_row_platform(authority, row):
+    """The messaging ``Platform`` of a row this module mounts for a viewer, else None: a lineage root
+    with a ``session_key`` of THIS served profile and a messaging-platform source. The stored picker
+    (``gateway/session_listing.py``) offers exactly these rows, so a listed row always resumes."""
+    route = row.get('session_key') if row is not None else None
+    platform = _messaging_platform(row['source']) if route else None
+    if platform is None or authority.logical_owner(row['id']) != row['id']:
+        return None  # a compression continuation: its lineage root is the mount (session.resume maps it)
+    registry = getattr(authority.runner, 'session_authorities', None)
+    profile = authority.runner.session_store._named_profile_for_key(route)
+    if profile != (registry.profile_name(authority) if registry is not None else None):
+        return None
+    return platform
+
+
 def restore_routed_session(authority, sid):
     """Publish *sid* as its lane would after a restart; None when this row is not one a route or a
     messaging-platform row can stand for."""
     from gateway.session_authority import LiveSession
     from gateway.session_contract import SessionRef
     row = authority.db.get_session(sid)
-    route = row.get('session_key') if row is not None else None
-    platform = _messaging_platform(row['source']) if route else None
-    if platform is None or authority.logical_owner(sid) != sid:
-        return None  # a compression continuation: its lineage root is the mount (session.resume maps it)
-    store = authority.runner.session_store
-    registry = getattr(authority.runner, 'session_authorities', None)
-    profile = store._named_profile_for_key(route)
-    if profile != (registry.profile_name(authority) if registry is not None else None):
+    if routed_row_platform(authority, row) is None:
         return None
+    route, platform = row['session_key'], _messaging_platform(row['source'])
+    store = authority.runner.session_store
+    profile = store._named_profile_for_key(route)
     routed = _routed_entry(authority, sid, route)
     entry = routed or _row_entry(row, platform, route, profile)
     if entry is None:

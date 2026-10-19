@@ -4,6 +4,20 @@ from hermes_state_mutation_binding import authorize_history
 from hermes_state_runtime import RuntimeStoreError
 
 
+_LOCAL_PICKER_SOURCES = ('cli', 'tui', 'gui', 'desktop', 'local', 'cron')
+
+
+def _picker_sources():
+    """Local surfaces plus every messaging platform: the classic picker listed all human sessions.
+    ``cron`` rows are canonical local sessions (``session_cron``): they list through the closed-session
+    rule, so only a principal ``authorize`` lets read them (an operator transport) sees them."""
+    from gateway.config import Platform
+    return [*_LOCAL_PICKER_SOURCES, *(p.value for p in Platform if p not in (Platform.LOCAL, Platform.API_SERVER))]
+
+
+_PICKER_SOURCES = _picker_sources()
+
+
 def stored_picker_sessions(authority, actor, *, limit, include_hidden=False):
     """Offer legacy local rows only to the same native transport that may resume them.
 
@@ -18,12 +32,21 @@ def stored_picker_sessions(authority, actor, *, limit, include_hidden=False):
     db = authority.db
     sessions, offset, seen = [], 0, set()
     while len(sessions) < limit:
-        rows = db.list_sessions_rich(sources=['cli', 'tui', 'gui', 'desktop', 'local'], limit=200, offset=offset,
+        rows = db.list_sessions_rich(sources=_PICKER_SOURCES, limit=200, offset=offset,
             order_by_last_active=True, compact_rows=True, include_hidden=include_hidden)
         for row in rows:
             sid = db.get_compression_tip(row['id']) or row['id']
             tip = db.get_session(sid)
             if tip is None:
+                continue
+            if row['source'] not in _LOCAL_PICKER_SOURCES:
+                # A stored messaging conversation (TUI-8): main's picker listed it, and
+                # ``session.resume`` mounts it from its own origin (session_route_recovery).
+                messaging = _messaging_row(authority, row, sid, tip)
+                if messaging is not None:
+                    sessions.append(messaging)
+                    if len(sessions) == limit:
+                        break
                 continue
             closed = _closed_local_session(authority, actor, row, tip)
             if closed is not None:
@@ -52,6 +75,18 @@ def stored_picker_sessions(authority, actor, *, limit, include_hidden=False):
             break
         offset += len(rows)
     return {'sessions': sessions, 'scope': 'stored'}
+
+
+def _messaging_row(authority, row, sid, tip):
+    """The picker row of a cold messaging lineage ``session.resume`` mounts; None when it is already
+    live (the live feed lists it) or is not one this profile's route recovery would mount."""
+    from gateway.session_route_recovery import routed_row_platform
+    if row['id'] in authority.sessions or routed_row_platform(authority, authority.db.get_session(row['id'])) is None:
+        return None
+    return {'id': row['id'], 'session_id': row['id'], 'resolved_id': row['id'],
+            'title': tip.get('title') or row.get('title') or '', 'source': row['source'],
+            'started_at': row.get('started_at'), 'message_count': row.get('message_count', 0),
+            'model': tip.get('model'), 'running': False}
 
 
 def _closed_local_session(authority, actor, row, tip):
