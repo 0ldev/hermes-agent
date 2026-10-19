@@ -77,3 +77,24 @@ async def test_detaching_the_reads_subscription_after_a_refused_delete_restores_
     assert [r['id'] for r in stored['sessions']] == ['closed']
 
 
+
+
+@pytest.mark.asyncio
+async def test_the_release_detaches_by_the_id_the_read_resolved_to(tmp_path, monkeypatch):
+    """A compressed session: the picker's history row names a segment (or a legacy root), and the
+    owner's read resolves it elsewhere and subscribes under the RESOLVED id. The clients release by
+    ``snapshot.session_id``; a detach by the id they sent is a no-op that leaves the viewer attached."""
+    from gateway.session_controls import AuthorityConnection
+    from tests.gateway.test_local_resume_compression_child import _compressed
+    compressed = await _compressed(tmp_path, monkeypatch)
+    authority = compressed.warm
+    picker = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {
+        'provider': 'local', 'user_id': 'owner', 'profile_id': 'fixture', 'instance_id': authority.instance_id,
+        'capabilities': ['session:create', 'session:read', 'session:control']})
+    read = await _call(picker, 'session.resume', session_id='child-1')  # the id the client holds
+    assert read['session_id'] == compressed.owner                      # the owner resolved it elsewhere
+    by_sent = await _call(picker, 'session.detach', session_id='child-1', subscription_id=read['subscription_id'])
+    assert by_sent['detached'] is False
+    by_resolved = await _call(picker, 'session.detach', session_id=read['session_id'],
+                              subscription_id=read['subscription_id'])
+    assert by_resolved['detached'] is True, by_resolved

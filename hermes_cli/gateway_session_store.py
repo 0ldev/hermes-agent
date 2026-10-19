@@ -193,8 +193,11 @@ class GatewaySessionStore:
         return child
 
     def _mutate(self, session_id, operation, payload, *, release_read=False):
-        """``release_read``: this viewer does not watch *session_id*, so the CAS read attached it; a
-        refused write detaches that subscription, or a closed session stays in the live list."""
+        """``release_read``: undo the CAS read's attach if the write is refused, unless this viewer
+        already watches the session the read resolved to. The owner answers (and subscribes) under
+        the RESOLVED id (a compression segment maps to its logical owner, a legacy compressed root to
+        its tip), so both the held check and the detach use ``snapshot.session_id``, never the id sent;
+        a detach by the sent id is a no-op and the closed session stays in the live list."""
         snapshot = self.call("session.resume", session_id=session_id)
         fence = {}
         if operation in _GENERATION_FENCED:
@@ -203,10 +206,15 @@ class GatewaySessionStore:
             return self.call("session.mutate", session_id=session_id, request_id=uuid.uuid4().hex,
                              expected_revision=snapshot["revision"], operation=operation, payload=payload, **fence)
         except GatewayClientError:
+            resolved = snapshot.get("session_id") or session_id
             subscription = snapshot.get("subscription_id")
-            if release_read and subscription:
+            # The owner reuses this viewer's subscription for its read: releasing one this CLI held
+            # under the resolved id would end the view of a session it is watching.
+            state = self.connection.states.get(resolved)
+            held = state is not None and state.subscription_id is not None
+            if release_read and subscription and not held:
                 try:
-                    self.call("session.detach", session_id=session_id, subscription_id=subscription)
+                    self.call("session.detach", session_id=resolved, subscription_id=subscription)
                 except GatewayClientError as exc:
                     logger.debug("session.detach after a refused %s failed: %s", operation, exc)
             raise
@@ -287,12 +295,9 @@ class GatewaySessionStore:
         return subscription
 
     def delete_session(self, session_id, sessions_dir=None):
-        # The owner reuses this viewer's subscription for its read: only one the read itself opened
-        # is released on a refusal, never the view of a session this CLI is watching.
-        state = self.connection.states.get(session_id)
-        held = state is not None and state.subscription_id is not None
+        # A refused delete releases only a subscription the CAS read itself opened (``_mutate``).
         self.snapshots.pop(session_id, None)
-        self._mutate(session_id, "delete", {}, release_read=not held)
+        self._mutate(session_id, "delete", {}, release_read=True)
         self._leave(session_id)
         return True
 

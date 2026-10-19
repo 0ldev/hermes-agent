@@ -725,3 +725,42 @@ def test_a_refused_delete_keeps_a_session_this_viewer_already_watches(store):
         db.delete_session("local-old")
     assert "session.detach" not in [m for m, _ in client.calls]
     assert db.connection.state("local-old").subscription_id == "sub-local-old"
+
+
+def test_a_refused_delete_detaches_by_the_id_the_read_resolved_to(store):
+    """A compressed session's history row names a segment the owner resolves to its logical owner
+    and subscribes under that id; the release must detach by the resolved id, or it is a no-op."""
+    db, client = store
+    original = client.rpc
+
+    async def rpc(method, *, _timeout=None, **params):
+        if method == "session.resume" and params["session_id"] == "segment-1":
+            client.calls.append((method, params))
+            return snapshot("local-owner")
+        return await original(method, _timeout=_timeout, **params)
+    client.rpc = rpc
+    _refusing_delete(client)
+    with pytest.raises(GatewayClientError, match="revision_conflict"):
+        db.delete_session("segment-1")
+    assert client.calls[-1] == ("session.detach", {"session_id": "local-owner", "subscription_id": "sub-local-owner"})
+
+
+def test_a_refused_delete_of_a_segment_keeps_the_resolved_session_this_viewer_watches(store):
+    """The held check uses the resolved id too: the CLI watches the logical owner, the read of its
+    segment reuses that subscription, and a refusal must not end the CLI's own view."""
+    db, client = store
+    client.known.add("local-owner")
+    db.open_session(cli("local-owner", resumed=True))
+    original = client.rpc
+
+    async def rpc(method, *, _timeout=None, **params):
+        if method == "session.resume" and params["session_id"] == "segment-1":
+            client.calls.append((method, params))
+            return snapshot("local-owner")
+        return await original(method, _timeout=_timeout, **params)
+    client.rpc = rpc
+    _refusing_delete(client, "permission_denied")
+    with pytest.raises(GatewayClientError, match="permission_denied"):
+        db.delete_session("segment-1")
+    assert "session.detach" not in [m for m, _ in client.calls]
+    assert db.connection.state("local-owner").subscription_id == "sub-local-owner"

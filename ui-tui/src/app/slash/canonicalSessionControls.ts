@@ -62,6 +62,8 @@ export interface MutationSnapshot {
   stored_messages?: Array<Record<string, unknown>>
   revision: number
   execution_generation: number
+  /** The id the owner resolved the read to (and subscribed under); may differ from the one sent. */
+  session_id?: string
   subscription_id?: string
 }
 
@@ -86,7 +88,7 @@ export async function mutateCanonical(
   operation: CanonicalOperation,
   payload: Record<string, unknown> | ((snapshot: MutationSnapshot) => null | Record<string, unknown>),
   stale: () => boolean = () => false,
-  { releaseRead = false }: { releaseRead?: boolean } = {}
+  { releaseRead = false, keepView }: { keepView?: (resolvedId: string) => boolean; releaseRead?: boolean } = {}
 ) {
   let requests = pending.get(gw)
 
@@ -103,13 +105,19 @@ export async function mutateCanonical(
   // `releaseRead`: the CAS read below attached this connection as a viewer of a session it does not
   // otherwise watch (the picker deleting a history row). A write that does not go through leaves it
   // attached, which keeps a closed session in the owner's live list; a plain detach undoes the read.
-  let readSubscription: string | undefined
+  // The owner answers (and subscribes) under the RESOLVED id: a compression segment maps to its
+  // logical owner and a legacy compressed root to its tip. A detach by `sid` would be a no-op there.
+  // `keepView(resolvedId)`: the owner reuses this connection's subscription for the read, so a
+  // resolved session this view already watches is never released.
+  let readSubscription: undefined | { session_id: string; subscription_id: string }
 
   if (!params) {
     const snapshot = asRpcResult<MutationSnapshot>(await gw.request('session.resume', { session_id: sid }))
 
-    if (releaseRead && typeof snapshot?.subscription_id === 'string') {
-      readSubscription = snapshot.subscription_id
+    const resolved = typeof snapshot?.session_id === 'string' && snapshot.session_id ? snapshot.session_id : sid
+
+    if (releaseRead && typeof snapshot?.subscription_id === 'string' && !keepView?.(resolved)) {
+      readSubscription = { session_id: resolved, subscription_id: snapshot.subscription_id }
     }
 
     if (stale()) {
@@ -154,7 +162,7 @@ export async function mutateCanonical(
     }
 
     if (readSubscription) {
-      await gw.request('session.detach', { session_id: sid, subscription_id: readSubscription }).catch(() => undefined)
+      await gw.request('session.detach', readSubscription).catch(() => undefined)
     }
 
     throw error
