@@ -76,7 +76,12 @@ def maybe_switch_wire_after_first_response(agent: Any, response: Any, api_call_c
     Only for provider=nous, anthropic/* models, ``nous.anthropic_wire: auto``, and only on the
     session's first API call.
     """
-    if api_call_count != 1 or getattr(agent, "_nous_wire_decided", False):
+    # The decision belongs to one session: a reset (/new, /resume, /branch) re-decides from the
+    # new session's first response, so a promoted wire can also go back to chat.
+    if api_call_count != 1 or getattr(agent, "_nous_wire_decided", None) == agent.session_id:
+        return False
+    # A temporary fallback is not this session's route: promoting it would make it the primary.
+    if getattr(agent, "_fallback_activated", False):
         return False
     if (getattr(agent, "provider", "") or "").lower() != "nous":
         return False
@@ -89,7 +94,7 @@ def maybe_switch_wire_after_first_response(agent: Any, response: Any, api_call_c
             return False
     except Exception:
         return False
-    agent._nous_wire_decided = True  # one decision per session, whatever it is
+    agent._nous_wire_decided = agent.session_id  # one decision per session, whatever it is
     upstream = classify_upstream(response)
     want = wire_for_upstream(upstream)
     if want == "anthropic_messages" and not _native_sdk_available():
@@ -100,8 +105,12 @@ def maybe_switch_wire_after_first_response(agent: Any, response: Any, api_call_c
     if want == getattr(agent, "api_mode", None):
         logger.debug("nous wire auto: upstream=%s, staying on %s", upstream, want)
         return False
-    agent._nous_wire_pending = (want, upstream)
+    agent._nous_wire_pending = (want, upstream, _route(agent))
     return True
+
+
+def _route(agent: Any) -> tuple:
+    return (agent.session_id, agent.model, agent.provider, agent.base_url, agent.api_mode)
 
 
 def apply_pending_wire_switch(agent: Any) -> bool:
@@ -113,7 +122,14 @@ def apply_pending_wire_switch(agent: Any) -> bool:
     if not pending:
         return False
     agent._nous_wire_pending = None
-    want, upstream = pending
+    want, upstream, route = pending
+    if route != _route(agent) or getattr(agent, "_fallback_activated", False):
+        # The session, model or route changed (or a fallback took over) since the evidence.
+        logger.debug("nous wire auto: dropping stale %s decision for %s", want, route)
+        return False
+    # switch_model is the user model-change path and re-resolves reasoning from config; a
+    # wire-only change keeps the policy this agent was built with (e.g. delegation overrides).
+    reasoning_config = getattr(agent, "reasoning_config", None)
     try:
         from agent.agent_runtime_helpers import switch_model
         switch_model(agent, agent.model, "nous", api_key=getattr(agent, "api_key", "") or "",
@@ -121,6 +137,7 @@ def apply_pending_wire_switch(agent: Any) -> bool:
     except Exception as exc:  # never let wire selection break a turn
         logger.warning("nous wire auto: switch to %s failed (%s); staying on %s", want, exc, agent.api_mode)
         return False
+    agent.reasoning_config = reasoning_config
     logger.info("nous wire auto: upstream=%s -> %s for the rest of session %s", upstream, want,
                 getattr(agent, "session_id", "?"))
     return True
