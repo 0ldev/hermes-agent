@@ -14,6 +14,7 @@ per ping already sent). Incidents share ``cron/executions.db`` with
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import sqlite3
 import threading
@@ -258,9 +259,14 @@ def repeat_alert_backoff() -> float:
 
 def reminder_cooldown_hours(incident: dict[str, Any], base_hours: float) -> float:
     """``base * backoff^(pings sent - 1)``, capped at a week (never below a larger configured base)."""
+    cap = max(base_hours, MAX_REMINDER_COOLDOWN_HOURS)
     sent = max(1, int(incident.get("alert_count") or 0))
-    escalated = base_hours * repeat_alert_backoff() ** (sent - 1)
-    return min(escalated, max(base_hours, MAX_REMINDER_COOLDOWN_HOURS))
+    backoff = repeat_alert_backoff()
+    # Compare in log space first: backoff ** (sent - 1) overflows a float for a long-running
+    # incident, and the caller would then deliver every ping instead of capping.
+    if backoff > 1 and (sent - 1) * math.log(backoff) >= math.log(cap / base_hours):
+        return cap
+    return min(base_hours * backoff ** (sent - 1), cap)
 
 
 def alerted_within(incident: dict[str, Any], hours: float) -> bool:

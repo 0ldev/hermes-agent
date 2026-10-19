@@ -438,9 +438,11 @@ def test_reminder_cooldown_escalates_per_ping_and_resets_on_recovery(monkeypatch
     incident already sent (6h, 18h, ... with 3), and a green run starts the count over."""
     from datetime import timedelta
 
+    from hermes_constants import get_hermes_home
+
     inc = _point_db(monkeypatch, tmp_path)
-    monkeypatch.setattr(sched, "_failure_repeat_alert_hours", lambda: 6.0)
-    monkeypatch.setattr(inc, "repeat_alert_backoff", lambda: 3.0)
+    (get_hermes_home() / "config.yaml").write_text(
+        "cron:\n  failure_repeat_alert_hours: 6\n  failure_repeat_alert_backoff: 3\n")
     job = _job()
     _, inc_id = sched._upsert_incident_for_failure(job, "repeat boom")
 
@@ -461,3 +463,8 @@ def test_reminder_cooldown_escalates_per_ping_and_resets_on_recovery(monkeypatch
     assert inc.get_incident(inc_id)["alert_count"] == 0
     sched._mark_incident_alerted(inc_id)
     assert ago(7) is False
+
+    # A long flat-cooldown history must cap at a week, not overflow into per-run pings.
+    with inc._transaction() as conn:
+        conn.execute("UPDATE cron_incidents SET alert_count=1000 WHERE id=?", (inc_id,))
+    assert ago(167) is True and ago(169) is False
