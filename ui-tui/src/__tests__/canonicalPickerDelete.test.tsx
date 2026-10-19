@@ -20,7 +20,17 @@ function mount(mutate: (params: any) => Promise<unknown>) {
     }
 
     if (method === 'session.resume') {
-      return { session_id: params.session_id, revision: 4, execution_generation: 2, messages: [] }
+      return {
+        session_id: params.session_id,
+        revision: 4,
+        execution_generation: 2,
+        messages: [],
+        subscription_id: `sub-${params.session_id}`
+      }
+    }
+
+    if (method === 'session.detach') {
+      return { session_id: params.session_id, subscription_id: params.subscription_id, detached: true }
     }
 
     if (method === 'session.mutate') {
@@ -89,6 +99,8 @@ it('deletes a stored session through session.mutate with the resume CAS tuple', 
       payload: {}
     })
     expect(request.mock.calls.map(([method]) => method)).not.toContain('session.delete')
+    // A committed delete retires the session on the owner: nothing to detach.
+    expect(request.mock.calls.map(([method]) => method)).not.toContain('session.detach')
     await vi.waitFor(() => {
       out.text = ''
       instance.rerender(React.cloneElement(element))
@@ -116,6 +128,24 @@ it('keeps a refused delete on screen past the live-status poll', async () => {
     instance.rerender(React.cloneElement(element))
     await vi.waitFor(() => expect(out.text).toContain('error: session_busy'))
     expect(out.text).toContain('1 resumable')
+  } finally {
+    instance.unmount()
+  }
+})
+
+it('detaches the viewer its CAS read attached when the delete is refused (#134889 TUI-19)', async () => {
+  const { deleteStored, instance, request } = mount(async () => {
+    throw Object.assign(new Error('revision_conflict'), { data: { reason: 'revision_conflict' } })
+  })
+
+  try {
+    await deleteStored()
+    // Without it the closed session stays subscribed, so the owner lists it live until Ink exits.
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith('session.detach', { session_id: 'old', subscription_id: 'sub-old' })
+    )
+    const methods = request.mock.calls.map(([method]) => method)
+    expect(methods.indexOf('session.detach')).toBeGreaterThan(methods.indexOf('session.mutate'))
   } finally {
     instance.unmount()
   }

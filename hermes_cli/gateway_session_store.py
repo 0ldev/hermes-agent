@@ -192,13 +192,24 @@ class GatewaySessionStore:
         self._adopt(self.attach(child))
         return child
 
-    def _mutate(self, session_id, operation, payload):
+    def _mutate(self, session_id, operation, payload, *, release_read=False):
+        """``release_read``: this viewer does not watch *session_id*, so the CAS read attached it; a
+        refused write detaches that subscription, or a closed session stays in the live list."""
         snapshot = self.call("session.resume", session_id=session_id)
         fence = {}
         if operation in _GENERATION_FENCED:
             fence["expected_generation"] = snapshot["execution_generation"]
-        return self.call("session.mutate", session_id=session_id, request_id=uuid.uuid4().hex,
-                         expected_revision=snapshot["revision"], operation=operation, payload=payload, **fence)
+        try:
+            return self.call("session.mutate", session_id=session_id, request_id=uuid.uuid4().hex,
+                             expected_revision=snapshot["revision"], operation=operation, payload=payload, **fence)
+        except GatewayClientError:
+            subscription = snapshot.get("subscription_id")
+            if release_read and subscription:
+                try:
+                    self.call("session.detach", session_id=session_id, subscription_id=subscription)
+                except GatewayClientError as exc:
+                    logger.debug("session.detach after a refused %s failed: %s", operation, exc)
+            raise
 
     def set_session_title(self, session_id, title):
         try:
@@ -276,8 +287,12 @@ class GatewaySessionStore:
         return subscription
 
     def delete_session(self, session_id, sessions_dir=None):
+        # The owner reuses this viewer's subscription for its read: only one the read itself opened
+        # is released on a refusal, never the view of a session this CLI is watching.
+        state = self.connection.states.get(session_id)
+        held = state is not None and state.subscription_id is not None
         self.snapshots.pop(session_id, None)
-        self._mutate(session_id, "delete", {})
+        self._mutate(session_id, "delete", {}, release_read=not held)
         self._leave(session_id)
         return True
 

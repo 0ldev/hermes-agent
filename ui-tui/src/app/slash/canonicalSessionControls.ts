@@ -62,6 +62,7 @@ export interface MutationSnapshot {
   stored_messages?: Array<Record<string, unknown>>
   revision: number
   execution_generation: number
+  subscription_id?: string
 }
 
 /** One revision-fenced `session.mutate` (`gateway/session_mutations.py`). The CAS tuple comes from a
@@ -84,7 +85,8 @@ export async function mutateCanonical(
   sid: string,
   operation: CanonicalOperation,
   payload: Record<string, unknown> | ((snapshot: MutationSnapshot) => null | Record<string, unknown>),
-  stale: () => boolean = () => false
+  stale: () => boolean = () => false,
+  { releaseRead = false }: { releaseRead?: boolean } = {}
 ) {
   let requests = pending.get(gw)
 
@@ -98,9 +100,17 @@ export async function mutateCanonical(
   const key = JSON.stringify([sid, operation, typeof payload === 'function' ? null : payload])
   retireCanonicalControls(gw, sid, key)
   let params = requests.get(key)
+  // `releaseRead`: the CAS read below attached this connection as a viewer of a session it does not
+  // otherwise watch (the picker deleting a history row). A write that does not go through leaves it
+  // attached, which keeps a closed session in the owner's live list; a plain detach undoes the read.
+  let readSubscription: string | undefined
 
   if (!params) {
     const snapshot = asRpcResult<MutationSnapshot>(await gw.request('session.resume', { session_id: sid }))
+
+    if (releaseRead && typeof snapshot?.subscription_id === 'string') {
+      readSubscription = snapshot.subscription_id
+    }
 
     if (stale()) {
       return
@@ -141,6 +151,10 @@ export async function mutateCanonical(
     // A structured authority refusal is definitive; transport errors are not.
     if ((error as { data?: { reason?: string } })?.data?.reason) {
       requests.delete(key)
+    }
+
+    if (readSubscription) {
+      await gw.request('session.detach', { session_id: sid, subscription_id: readSubscription }).catch(() => undefined)
     }
 
     throw error

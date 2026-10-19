@@ -558,9 +558,12 @@ export function ActiveSessionSwitcher({
       setDeleting(true)
       setActionErr('')
       // The shared gateway has no `session.delete`: its delete is the revision-fenced
-      // `session.mutate operation=delete` (the whole lineage), as the classic CLI sends it.
+      // `session.mutate operation=delete` (the whole lineage), as the classic CLI sends it. A history
+      // row is one this view does not watch: a refused delete detaches the viewer its CAS read attached.
       const deleted = gw.isCanonical
-        ? mutateCanonical(gw, target.id, 'delete', {}).then(mutation => Boolean(mutation?.result))
+        ? mutateCanonical(gw, target.id, 'delete', {}, undefined, { releaseRead: true }).then(mutation =>
+            Boolean(mutation?.result)
+          )
         : gw
             .request<SessionDeleteResponse>('session.delete', { session_id: target.id })
             .then(raw => asRpcResult<SessionDeleteResponse>(raw)?.deleted === target.id)

@@ -693,3 +693,35 @@ def test_resume_refusal_names_the_clashing_flag_and_the_way_forward(store):
     with pytest.raises(GatewayClientError, match="--provider differs .* use /model after resuming"):
         check_resume_policy(argparse.Namespace(provider="anthropic"),
                             {"info": {"launch_request": {"provider": "openrouter"}}})
+
+
+def _refusing_delete(client, reason="revision_conflict"):
+    original = client.rpc
+
+    async def rpc(method, *, _timeout=None, **params):
+        if method == "session.mutate" and params.get("operation") == "delete":
+            client.calls.append((method, params))
+            raise GatewayClientError(reason)
+        return await original(method, _timeout=_timeout, **params)
+    client.rpc = rpc
+
+
+def test_a_refused_delete_detaches_the_subscription_its_read_attached(store):
+    """#134889 TUI-19: the delete's CAS read (``session.resume``) attaches a viewer; a refused delete
+    must detach it, or the closed session stays in the live list until the CLI exits."""
+    db, client = store
+    _refusing_delete(client)
+    with pytest.raises(GatewayClientError, match="revision_conflict"):
+        db.delete_session("local-old")
+    assert client.calls[-1] == ("session.detach", {"session_id": "local-old", "subscription_id": "sub-local-old"})
+
+
+def test_a_refused_delete_keeps_a_session_this_viewer_already_watches(store):
+    """The session the CLI is viewing keeps its subscription: only a read that attached is undone."""
+    db, client = store
+    db.open_session(cli("local-old", resumed=True))
+    _refusing_delete(client, "permission_denied")
+    with pytest.raises(GatewayClientError, match="permission_denied"):
+        db.delete_session("local-old")
+    assert "session.detach" not in [m for m, _ in client.calls]
+    assert db.connection.state("local-old").subscription_id == "sub-local-old"
