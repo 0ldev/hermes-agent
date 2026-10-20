@@ -58,16 +58,12 @@ MAX_DERIVED_TITLE_CHARS = 48
 # answer-shaped output guard in generate_title; port of can1357/oh-my-pi#7306). 12 leaves headroom for
 # legitimate wordy titles while excluding full-sentence answers.
 _MAX_TITLE_WORDS = 12
-# The Desktop sidebar title column is ~150px of 13px text, about 23 characters of real titles (6.5px each).
-# The prompt aims there; the code cap is looser because cutting a 26-character title down to 23 drops its
-# head noun ("Partner birthday dinner" -> "Partner birthday"), which reads worse than the sidebar's own
-# ellipsis on a subject-first title. Models overshoot a prompt-only rule, so the cap is enforced in code.
+# The Desktop sidebar title column is ~150px of 13px text: about 23 characters of real titles (6.5px each).
+# The prompt aims there and asks for the subject first, so when a title does overflow, the surface's own
+# ellipsis cuts the least important word. The stored title is never trimmed: every surface truncates to its
+# own width (Desktop tooltip shows the whole title), and a code-side trim needs a word list that keeps
+# missing cases ("vs." left dangling).
 TITLE_TARGET_CHARS = 24
-MAX_MODEL_TITLE_CHARS = 28
-# A fitted title never ends on a word that only joins what was dropped ("Plugin update and").
-_DANGLING_TAIL_WORDS = frozenset(
-    ("a", "an", "and", "as", "at", "by", "for", "from", "in", "into", "of", "on", "or", "the", "to", "via",
-     "vs", "with", "&", "+", "-", "/", ":"))
 # Output budget for the title call: room for a fenced/prefixed JSON reply and for a reasoning model that
 # thinks despite the thinking-disabled request, without letting a runaway reply burn minutes.
 TITLE_MAX_TOKENS = 512
@@ -447,17 +443,6 @@ def _clean_title(text: str) -> Optional[str]:
     return title or None
 
 
-def _fit_title(title: str, cap: int = MAX_MODEL_TITLE_CHARS) -> str:
-    """Drop whole trailing words until *title* fits *cap*; a single overlong word is cut with an ellipsis."""
-    if len(title) <= cap:
-        return title
-    words = title.split()
-    while len(words) > 1 and (len(" ".join(words)) > cap or words[-1].lower() in _DANGLING_TAIL_WORDS):
-        words.pop()
-    fitted = " ".join(words).rstrip(",;:-")
-    return fitted if len(fitted) <= cap else fitted[: cap - 1].rstrip() + "…"
-
-
 def _safe_callback(callback: Optional[Callable], args: tuple, log_fmt: str, label: str) -> None:
     """Invoke an optional consumer callback, never raising."""
     try:
@@ -565,8 +550,6 @@ def generate_title(
             # Answer-shaped output: reject (not truncate) so the caller retries next exchange.
             logger.debug("Rejecting answer-shaped title output (%d words > %d)", len(title.split()), _MAX_TITLE_WORDS)
             return None
-        # Fit before the echo guard so the guard judges the string that would be stored.
-        title = _fit_title(title) if title is not None else None
         # Example-echo guard: a title that parrots one of the prompt's own
         # examples back verbatim says nothing about the session — reject it so
         # the instant derived title (a slice of the user's actual words)

@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 
 from agent.title_generator import (
-    MAX_MODEL_TITLE_CHARS,
     MAX_TITLE_INPUT_CHARS,
     _EXAMPLE_ECHO_REJECT,
     build_title_input,
@@ -188,12 +187,12 @@ class TestGenerateTitle:
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = (
             "<think>The user wants a title. I'll summarize the topic "
-            "concisely.</think>Python import errors"
+            "concisely.</think>Debugging Python Import Errors"
         )
 
         with patch("agent.title_generator.call_llm", return_value=mock_response):
             title = generate_title("help me fix this import")
-            assert title == "Python import errors"
+            assert title == "Debugging Python Import Errors"
             assert "<think>" not in title
             assert "summarize" not in title
 
@@ -213,26 +212,15 @@ class TestGenerateTitle:
             assert title is None
 
 
-    @pytest.mark.parametrize(("reply", "stored"), [
-        # Whole trailing words are dropped until the title fits the sidebar row.
-        ("Hermes-tern plugin update blocked by security scan", "Hermes-tern plugin update"),
-        # A fitted title never ends on a word that only joined what was dropped.
-        ("Plugin update force and security scan", "Plugin update force"),
-        # One word longer than the cap is cut with an ellipsis instead of vanishing.
-        ("A" * 100, "A" * 27 + "…"),
-        # A title already inside the cap is stored untouched.
-        ("Tern charts: log files", "Tern charts: log files"),
-    ])
-    def test_model_title_fits_the_sidebar(self, reply, stored):
-        """Models overshoot a prompt-only length rule, so the stored title is fitted in code."""
+    def test_truncates_long_titles(self):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = reply
+        mock_response.choices[0].message.content = "A" * 100
 
         with patch("agent.title_generator.call_llm", return_value=mock_response):
             title = generate_title("question")
-        assert title == stored
-        assert len(title) <= MAX_MODEL_TITLE_CHARS
+            assert len(title) == 80
+            assert title.endswith("...")
 
     def test_rejects_answer_shaped_output(self):
         """A model that ignores the titling task and answers the user's
@@ -266,10 +254,10 @@ class TestGenerateTitle:
         """A normal 3-7 word title is unaffected by the answer-shape guard."""
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Title resolver bug"
+        mock_response.choices[0].message.content = "Investigate the title resolver bug"
 
         with patch("agent.title_generator.call_llm", return_value=mock_response):
-            assert generate_title("question", "answer") == "Title resolver bug"
+            assert generate_title("question", "answer") == "Investigate the title resolver bug"
 
     @pytest.mark.parametrize("echo", [
         wrap.format(example)
@@ -591,10 +579,10 @@ class TestMaybeAutoTitle:
         # (``hermes sessions retitle-skills``) still asks the model.
         resp = MagicMock()
         resp.choices = [MagicMock()]
-        resp.choices[0].message.content = '{"title": "Startup memory routing"}'
+        resp.choices[0].message.content = '{"title": "Repair startup memory routing"}'
         with patch("hermes_cli.config.load_config_readonly", return_value=config), \
              patch("agent.title_generator.call_llm", return_value=resp):
-            assert generate_title("repair startup memory routing") == "Startup memory routing"
+            assert generate_title("repair startup memory routing") == "Repair startup memory routing"
 
     def test_enabled_false_still_disables_derived_and_model_titles(self, tmp_path):
         db = SessionDB(tmp_path / "state.db")
