@@ -44,7 +44,13 @@ CPU. Audio never leaves the machine, except through the opt-in `llm` command.
 The full upstream workflow (five loops, how to read the numbers, how to write
 queries, limits) is in `references/upstream-skill.md`, pinned at the commit
 above. Read it before your first real task. The notes below override it where
-they differ.
+they differ. Its repo-relative paths aren't installed with this skill; read
+them at the pinned commit instead:
+`docs/SFX.md` → https://github.com/Leonxlnx/earshot/blob/925ebe5/docs/SFX.md,
+`skills/real-sound` (recorded-audio pipeline) →
+https://github.com/Leonxlnx/earshot/tree/925ebe5/skills/real-sound,
+`eval/semantics/RESULTS.md` →
+https://github.com/Leonxlnx/earshot/blob/925ebe5/eval/semantics/RESULTS.md.
 
 ## When to use it
 
