@@ -136,18 +136,21 @@ jobs:
       tags: ${{ steps.pick.outputs.tags }}
     steps:
       # This job only reads tag names and trees, so take the cheap
-      # checkout: no blobs (filter), no other files (sparse), but DO fetch
-      # tags -- they are the whole input, and the default shallow checkout
-      # has none.
+      # checkout: no blobs (filter), no other files (sparse).
       - uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
         with:
           ref: ${{ inputs.commit }}
           filter: blob:none
-          fetch-tags: true
           sparse-checkout: |
             scripts/sandbox/pick-release-tags.sh
             scripts/releases/pick_tags.py
           sparse-checkout-cone-mode: false
+      # The tags are the whole input. A shallow single-commit fetch never
+      # carries them (`fetch-tags: true` only stops `--no-tags`; git follows
+      # tags that point into the fetched history, and one commit has none), so
+      # fetch the release tags by refspec: one commit and tree per tag, no blobs.
+      - name: Fetch release tags
+        run: git fetch --no-tags --filter=blob:none --depth=1 origin '+refs/tags/v*:refs/tags/v*'
       - id: pick
         env:
           # Inputs never touch shell syntax directly: TAG_COUNT arrives via
