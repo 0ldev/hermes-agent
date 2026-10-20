@@ -123,3 +123,104 @@ def test_completer_lists_handle_and_title_newest_first(tmp_path):
     assert _complete(home, "zzz") == []
     assert _complete(home, "", "hermes", "-p", "work", "-r")[0] == f"{handle_for('work-new')}\twork tern charts"
     assert _complete(home, "", HERMES_HOME=str(home / "profiles" / "work"))[0].startswith(handle_for("work-new"))
+
+
+def test_backfill_survives_a_handle_claimed_by_another_writer(tmp_path, monkeypatch):
+    """Another process commits the handle a backfill picked, between its read and its write: the open
+    still succeeds, and the row fills on a later open."""
+    import hermes_state_handles
+
+    path = tmp_path / "state.db"
+    SessionDB(db_path=path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO sessions (id, source, started_at) VALUES ('legacy', 'cli', 0)")
+    conn.commit()
+    conn.close()
+    real = hermes_state_handles.handle_for
+
+    def drawn_then_claimed(session_id, salt=0):
+        handle = real(session_id, salt)
+        other = sqlite3.connect(path)
+        other.execute("INSERT OR IGNORE INTO sessions (id, source, started_at, handle) VALUES ('racer', 'cli', 0, ?)",
+                      (handle,))
+        other.commit()
+        other.close()
+        return handle
+    monkeypatch.setattr(hermes_state_handles, "handle_for", drawn_then_claimed)
+    SessionDB(db_path=path).close()
+    monkeypatch.setattr(hermes_state_handles, "handle_for", real)
+
+    store = SessionDB(db_path=path)
+    handles = {r["id"]: r["handle"] for r in store._read_all("SELECT id, handle FROM sessions")}
+    store.close()
+    assert handles["racer"] == real("legacy") and handles["legacy"] == real("legacy", 1)
+
+
+def test_handle_lookup_on_a_store_no_writer_has_upgraded(tmp_path):
+    """A read-only open (resume lookups) of a store without the column answers None, and title still resolves."""
+    path = tmp_path / "state.db"
+    store = SessionDB(db_path=path)
+    store.create_session("old", "cli")
+    store.set_session_title("old", "My project")
+    store.close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP INDEX IF EXISTS idx_sessions_handle")
+    conn.execute("DROP INDEX IF EXISTS idx_sessions_handle_missing")
+    conn.execute("ALTER TABLE sessions DROP COLUMN handle")
+    conn.commit()
+    conn.close()
+
+    reader = SessionDB(db_path=path, read_only=True)
+    try:
+        assert reader.get_session_id_by_handle("tidy-amber-otter") is None
+        assert reader.resolve_session_by_title("My project") == "old"
+    finally:
+        reader.close()
+
+
+def test_completer_lists_listed_children_and_casefolds_the_profile(tmp_path):
+    """Branch children and compression tips (named by sessions list) complete; ancestors and sub-agents don't;
+    `-p Work` reads the `work` profile as the CLI does."""
+    home = tmp_path / ".hermes"
+    work = home / "profiles" / "work"
+    work.mkdir(parents=True)
+    store = SessionDB(db_path=work / "state.db")
+    store.create_session("root", "cli")
+    store.append_message("root", "user", "hello")
+    store.publish_compression_child(parent_session_id="root", child_session_id="tip", source="cli",
+                                    messages=[{"role": "user", "content": "summary"}],
+                                    require_compression_lease=False)
+    store.create_session("branch", "cli", model_config={"_branched_from": "tip"}, parent_session_id="tip")
+    store.create_session("helper", "cli", model_config={"_delegate_from": "tip"}, parent_session_id="tip")
+    store.close()
+
+    listed = {line.split("\t")[0] for line in _complete(home, "", "hermes", "-p", "Work", "-r")}
+    assert listed == {handle_for("tip"), handle_for("branch")}
+
+
+@pytest.mark.platforms("posix")
+@pytest.mark.parametrize("words", [
+    ["hermes", "-r", ""],
+    ["hermes", "sessions", "delete", ""],
+    ["hermes", "-p", "work", "sessions", "delete", ""],
+    ["hermes", "sessions", "delete", "-y", ""],
+])
+def test_bash_completes_handles_wherever_options_sit(tmp_path, words):
+    """The generated bash script offers handles for -r and for sessions delete's argument around options."""
+    home = tmp_path / ".hermes"
+    for db_home in (home, home / "profiles" / "work"):
+        db_home.mkdir(parents=True, exist_ok=True)
+        store = SessionDB(db_path=db_home / "state.db")
+        store.create_session("only", "cli")
+        store.close()
+    script = tmp_path / "hermes.bash"
+    generated = subprocess.run([sys.executable, "-m", "hermes_cli.main", "completion", "bash"], capture_output=True,
+                               text=True, check=True, cwd=Path(__file__).resolve().parents[2],
+                               env={**os.environ, "HERMES_HOME": str(home)})
+    script.write_text(generated.stdout)
+    words_bash = " ".join(f"'{w}'" for w in words)
+    probe = (f"source {script}; COMP_WORDS=({words_bash}); COMP_CWORD={len(words) - 1}; "
+             "_hermes_completion; printf '%s\\n' \"${COMPREPLY[@]}\"")
+    result = subprocess.run(["bash", "--norc", "--noprofile", "-c", probe], capture_output=True, text=True,
+                            env={"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "")}, check=True)
+    assert result.stdout.split() == [handle_for("only")]

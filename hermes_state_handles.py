@@ -96,7 +96,8 @@ def backfill_handles(cursor: sqlite3.Cursor, limit: int = _BACKFILL_LIMIT) -> in
         pass
     cursor.execute("SAVEPOINT session_handles")
     try:
-        cursor.executemany("UPDATE sessions SET handle = ? WHERE id = ? AND handle IS NULL", updates)
+        # OR IGNORE: another process may claim a handle after `taken` was read; that row fills next open.
+        cursor.executemany("UPDATE OR IGNORE sessions SET handle = ? WHERE id = ? AND handle IS NULL", updates)
     except BaseException:
         cursor.execute("ROLLBACK TO session_handles")
         raise

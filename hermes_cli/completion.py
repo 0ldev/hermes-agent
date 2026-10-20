@@ -72,17 +72,6 @@ def generate_bash(parser: argparse.ArgumentParser) -> str:
                 f"                    ;;\n"
                 f"            esac\n"
                 f"            ;;")
-        elif cmd == "sessions" and info["subcommands"]:
-            subcmds = " ".join(sorted(info["subcommands"]))
-            cases.append(
-                f"        sessions)\n"
-                f"            if [[ $COMP_CWORD -eq 3 && ( {' || '.join(f'${{COMP_WORDS[2]}} == {a}' for a in _SESSION_ACTIONS)} ) ]]; then\n"
-                f"                COMPREPLY=($(compgen -W \"$(_hermes_sessions \"$cur\")\" -- \"$cur\"))\n"
-                f"            else\n"
-                f"                COMPREPLY=($(compgen -W \"{subcmds}\" -- \"$cur\"))\n"
-                f"            fi\n"
-                f"            return\n"
-                f"            ;;")
         elif info["subcommands"] or info["flags"]:
             words = " ".join(sorted(info["subcommands"]) if info["subcommands"] else info["flags"])
             cases.append(
@@ -110,6 +99,22 @@ _hermes_sessions() {{
     {_session_command()} "$1" "${{COMP_WORDS[@]}}" 2>/dev/null | cut -f1
 }}
 
+# True when the word being completed is the session argument of `sessions delete|rename`, wherever
+# options (-p NAME, -y) sit between the words.
+_hermes_session_arg() {{
+    local i w cmd= act= n=0
+    for ((i=1; i<COMP_CWORD; i++)); do
+        w=${{COMP_WORDS[i]}}
+        case "$w" in
+            -p|--profile) ((i++)); continue ;;
+            -*) continue ;;
+        esac
+        if [[ -z $cmd ]]; then cmd=$w; elif [[ -z $act ]]; then act=$w; else ((n++)); fi
+    done
+    [[ $cmd == sessions && $n -eq 0 ]] && case "$act" in {'|'.join(_SESSION_ACTIONS)}) return 0 ;; esac
+    return 1
+}}
+
 _hermes_completion() {{
     local cur prev
     COMPREPLY=()
@@ -122,13 +127,17 @@ _hermes_completion() {{
         return
     fi
 
-    # Session handles after -r/--resume and -c/--continue
+    # Session handles after -r/--resume, -c/--continue and as the argument of sessions delete|rename
     case "$prev" in
         {'|'.join(_SESSION_FLAGS)})
             COMPREPLY=($(compgen -W "$(_hermes_sessions "$cur")" -- "$cur"))
             return
             ;;
     esac
+    if [[ $cur != -* ]] && _hermes_session_arg; then
+        COMPREPLY=($(compgen -W "$(_hermes_sessions "$cur")" -- "$cur"))
+        return
+    fi
 
     if [[ $COMP_CWORD -ge 2 ]]; then
         case "${{COMP_WORDS[1]}}" in
@@ -286,7 +295,8 @@ def generate_fish(parser: argparse.ArgumentParser) -> str:
         "",
         "# Helper: session handles and titles, newest first",
         "function __hermes_sessions",
-        f"    {_session_command()} (commandline -ct) (commandline -opc) 2>/dev/null",
+        "    set -l cur (commandline -ct)  # quoted below: an empty token stays one (empty) argument",
+        f"    {_session_command()} \"$cur\" (commandline -opc) 2>/dev/null",
         "end",
         "",
         "# Disable file completion by default",

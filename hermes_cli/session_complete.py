@@ -12,9 +12,11 @@ from pathlib import Path
 
 _LIMIT = 200
 _QUERY = """
-    SELECT handle, COALESCE(title, '') FROM sessions
+    SELECT handle, COALESCE(title, '') FROM sessions  -- what `sessions list` shows: no compression
+                                                      -- ancestors (their tip is listed) and no sub-agent runs
     WHERE handle IS NOT NULL AND handle LIKE ? ESCAPE '\\' AND COALESCE(hidden, 0) = 0
-      AND parent_session_id IS NULL
+      AND COALESCE(end_reason, '') != 'compression' AND COALESCE(source, '') != 'tool'
+      AND (CASE WHEN json_valid(model_config) THEN json_extract(model_config, '$._delegate_from') END) IS NULL
     ORDER BY COALESCE(last_activity_at, started_at) DESC LIMIT ?
 """
 
@@ -27,12 +29,16 @@ def _native_root(environ) -> Path:
     return Path.home() / (".hermes" + suffix)
 
 
+def _profile_name(value):
+    return value.strip().casefold() or None  # as profiles.normalize_profile_name: `-p Work` is `work`
+
+
 def _profile_from_words(words):
     for i, word in enumerate(words):
         if word in ("-p", "--profile") and i + 1 < len(words):
-            return words[i + 1]
+            return _profile_name(words[i + 1])
         if word.startswith("--profile="):
-            return word.split("=", 1)[1]
+            return _profile_name(word.split("=", 1)[1])
     return None
 
 
@@ -45,7 +51,7 @@ def home_for(words, environ=os.environ) -> Path:
     root = (env.parent.parent if env.parent.name == "profiles" else env) if env else _native_root(environ)
     if profile is None:
         try:
-            profile = (root / "active_profile").read_text(encoding="utf-8-sig").strip() or None
+            profile = _profile_name((root / "active_profile").read_text(encoding="utf-8-sig"))
         except OSError:
             profile = None
     return root if profile in (None, "default") else root / "profiles" / profile
