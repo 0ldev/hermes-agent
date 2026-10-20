@@ -200,6 +200,10 @@ class SessionTitlesMixin:
             "WHERE s.title = ?", (title,))
         return self._session_row_dict(row) if row else None
 
+    def get_session_id_by_handle(self, handle: str) -> Optional[str]:
+        row = self._read_one("SELECT id FROM sessions WHERE handle = ?", ((handle or "").strip().lower(),))
+        return row["id"] if row else None
+
     def resolve_session_by_title(self, title: str) -> Optional[str]:
         """Resolve a title to a session ID, preferring the latest "title #N" continuation."""
         exact = self.get_session_by_title(title)
