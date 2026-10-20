@@ -197,9 +197,10 @@ def test_builder_system_proxy_sends_raw(monkeypatch, callable_key):
 
 
 def test_custom_ca_disables_builder_gzip(monkeypatch):
-    import ssl
+    # certifi's bundle exists on every platform; ssl's default cafile is None on some Linux builds.
+    import certifi
 
-    monkeypatch.setenv("SSL_CERT_FILE", ssl.get_default_verify_paths().cafile)
+    monkeypatch.setenv("SSL_CERT_FILE", certifi.where())
     with adapter.build_anthropic_client("sk-ant-api03-x") as client:
         assert not isinstance(client._client, compression._GzipRequestSend)
 
