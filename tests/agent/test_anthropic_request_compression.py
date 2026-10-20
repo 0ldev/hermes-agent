@@ -329,6 +329,8 @@ def test_genuine_errors_are_returned_unchanged(status, headers):
      b'"message":"Failed to parse request: could not parse request body as JSON"}}',
      "invalid_json_at_origin"),
     (415, {"request-id": "req_x"}, b'unsupported', "unsupported_encoding"),
+    (400, {}, b'bad request', "non_anthropic_rejection"),
+    (403, {}, b'forbidden', "non_anthropic_rejection"),
 ])
 def test_encoding_rejections_resend_raw(status, headers, body, kind):
     captured = []
