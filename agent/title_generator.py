@@ -53,11 +53,19 @@ _CONTEXT_FOOTER_RE = re.compile(r"\n+--- (?:Context Warnings|Attached Context) -
 # Cap on the instant derived title; a raw fragment reads worse the longer it runs.
 MAX_DERIVED_TITLE_CHARS = 48
 # Answer-shaped guard: a tiny model sometimes answers instead of titling; longer is rejected, not truncated.
-# Upper bound on accepted title word count. Titling is a 3-7 word task; a small tiny-model sometimes ignores
+# Upper bound on accepted title word count. Titling is a short-phrase task; a small tiny-model sometimes ignores
 # the task and answers the user's message instead — that answer must never become the session title (see the
 # answer-shaped output guard in generate_title; port of can1357/oh-my-pi#7306). 12 leaves headroom for
 # legitimate wordy titles while excluding full-sentence answers.
 _MAX_TITLE_WORDS = 12
+# Model titles must fit the Desktop sidebar row (about 28 characters before the ellipsis). Models overshoot
+# a length asked for in the prompt (a real-session eval: 49 of 60 current titles were longer), so the
+# reply is also fitted in code by dropping whole trailing words.
+MAX_MODEL_TITLE_CHARS = 28
+# A fitted title never ends on a word that only joins what was dropped ("Plugin update and").
+_DANGLING_TAIL_WORDS = frozenset(
+    ("a", "an", "and", "as", "at", "by", "for", "from", "in", "into", "of", "on", "or", "the", "to", "via",
+     "vs", "with", "&", "+", "-", "/", ":"))
 # Output budget for the title call: room for a fenced/prefixed JSON reply and for a reasoning model that
 # thinks despite the thinking-disabled request, without letting a runaway reply burn minutes.
 TITLE_MAX_TOKENS = 512
@@ -70,11 +78,13 @@ TITLE_MAX_TOKENS = 512
 # rendered from these constants so the guard set and the prompt cannot drift
 # apart. Port of QwenLM/qwen-code#9709.
 _PROMPT_GOOD_EXAMPLES = (
-    "Fix login button on mobile",
-    "Postgres connection pool exhaustion",
+    "Postgres pool exhaustion",
+    "Desktop onboarding rebase",
     "Friendly greeting",
 )
 _PROMPT_VAGUE_EXAMPLE = "Code changes"
+# Shown as the "starts with a generic verb" counter-example; echoing it back is rejected like the others.
+_PROMPT_VERB_FIRST_EXAMPLE = "Check connected apps"
 
 # "Friendly greeting" is deliberately NOT in the reject set: the prompt
 # instructs the model to produce it for bare greetings, so it is a legitimate
@@ -83,7 +93,7 @@ _PROMPT_VAGUE_EXAMPLE = "Code changes"
 # derived title the guard falls back to is strictly more informative.
 _EXAMPLE_ECHO_REJECT = frozenset(
     t.lower() for t in _PROMPT_GOOD_EXAMPLES if t != "Friendly greeting"
-) | {_PROMPT_VAGUE_EXAMPLE.lower()}
+) | {_PROMPT_VAGUE_EXAMPLE.lower(), _PROMPT_VERB_FIRST_EXAMPLE.lower()}
 
 # "Friendly greeting" is what the prompt asks for when the opener has no topic yet, so
 # it is the one model title that must NOT settle the session: it is persisted at
@@ -95,10 +105,12 @@ _PROVISIONAL_GREETING_TITLE = "friendly greeting"
 
 _TITLE_PROMPT_TEMPLATE = (
     "You name chat sessions. Given the user's opening message, write a title "
-    "that lets them find this conversation again in a list.\n\n"
+    "that lets them find this conversation again in a narrow sidebar list.\n\n"
     "Rules:\n"
-    "- 3 to 7 words, sentence case (capitalize only the first word and proper nouns).\n"
-    "- Name what the user wants DONE, not that they asked a question.\n"
+    f"- 2 to 4 words, at most {MAX_MODEL_TITLE_CHARS} characters, sentence case "
+    "(capitalize only the first word and proper nouns).\n"
+    "- Lead with the specific subject: the file, feature, command, error, product, or PR number.\n"
+    "- Do not start with a generic verb (Check, Fix, Review, Locate, Investigate, Help, Explain).\n"
     "- Keep technical terms, filenames, numbers, and error codes exact.\n"
     "- Drop filler words: the, this, my, a, an.\n"
     "- No trailing punctuation, no quotes, no tool names, no 'Title:' prefix.\n"
@@ -107,8 +119,8 @@ _TITLE_PROMPT_TEMPLATE = (
     "__LANGUAGE_RULE__\n"
     + "".join(f'Good: {{"title": "{t}"}}\n' for t in _PROMPT_GOOD_EXAMPLES)
     + f'Too vague: {{"title": "{_PROMPT_VAGUE_EXAMPLE}"}}\n'
-    'Too long: {"title": "Investigate and fix the issue where the login button '
-    'does not respond on mobile devices"}\n\n'
+    + f'Starts with a generic verb: {{"title": "{_PROMPT_VERB_FIRST_EXAMPLE}"}}\n'
+    'Too long: {"title": "Investigate why the Postgres connection pool is exhausted"}\n\n'
     'Reply with JSON only: {"title": "..."}'
 )
 
@@ -433,6 +445,17 @@ def _clean_title(text: str) -> Optional[str]:
     return title or None
 
 
+def _fit_title(title: str, cap: int = MAX_MODEL_TITLE_CHARS) -> str:
+    """Drop whole trailing words until *title* fits *cap*; a single overlong word is cut with an ellipsis."""
+    if len(title) <= cap:
+        return title
+    words = title.split()
+    while len(words) > 1 and (len(" ".join(words)) > cap or words[-1].lower() in _DANGLING_TAIL_WORDS):
+        words.pop()
+    fitted = " ".join(words).rstrip(",;:-")
+    return fitted if len(fitted) <= cap else fitted[: cap - 1].rstrip() + "…"
+
+
 def _safe_callback(callback: Optional[Callable], args: tuple, log_fmt: str, label: str) -> None:
     """Invoke an optional consumer callback, never raising."""
     try:
@@ -531,7 +554,7 @@ def generate_title(
         )
         message = response.choices[0].message
         title = _clean_title(_extract_title_text(message.content or "") or _title_from_reasoning(message))
-        # Answer-shaped output guard: titling is a 3-7 word task, so a title with many words is a model that
+        # Answer-shaped output guard: titling is a short-phrase task, so a title with many words is a model that
         # ignored the task and answered the user's message instead ("I don't have context on X — that's not
         # something I recognize..."). Truncating would store half an assistant blob as the session title,
         # which is still an assistant blob — reject instead so the caller retries on the next exchange
@@ -540,6 +563,8 @@ def generate_title(
             # Answer-shaped output: reject (not truncate) so the caller retries next exchange.
             logger.debug("Rejecting answer-shaped title output (%d words > %d)", len(title.split()), _MAX_TITLE_WORDS)
             return None
+        # Fit before the echo guard so the guard judges the string that would be stored.
+        title = _fit_title(title) if title is not None else None
         # Example-echo guard: a title that parrots one of the prompt's own
         # examples back verbatim says nothing about the session — reject it so
         # the instant derived title (a slice of the user's actual words)
