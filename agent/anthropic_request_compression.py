@@ -2,7 +2,9 @@
 
 Lossless transport encoding: tokens and prompt caching are unchanged. A rejected
 encoding disables gzip process-wide and resends the original body once.
-Like Claude Code, custom-CA and proxied routes stay uncompressed.
+Like Claude Code, proxied routes and custom CAs set through SSL_CERT_FILE, SSL_CERT_DIR,
+REQUESTS_CA_BUNDLE or CURL_CA_BUNDLE stay uncompressed. A CA trusted only through the OS
+store (truststore) is not detected, so that route is compressed.
 """
 
 import gzip
