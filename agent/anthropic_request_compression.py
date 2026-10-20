@@ -133,8 +133,12 @@ class _GzipRequestSend:
         response = super().send(_compressed(request, raw), **kwargs)
         if response.status_code not in _REJECTION_STATUSES:
             return response
-        response.read()
-        kind = _rejection_kind(response)
+        try:
+            response.read()
+            kind = _rejection_kind(response)
+        except BaseException:  # same as httpx's own send(): a failed read must not leak the stream
+            response.close()
+            raise
         if kind is None:
             return response
         _latch(kind, response.status_code)

@@ -459,6 +459,20 @@ def test_rejected_stream_is_read_and_closed_before_resend():
     assert events == ["read", "closed"]
 
 
+def test_rejected_stream_read_failure_closes_response():
+    class BrokenBody(httpx.SyncByteStream):
+        def __iter__(self):
+            raise httpx.ReadError("connection reset")
+            yield b""
+
+    response = httpx.Response(415, stream=BrokenBody())
+    with _client(lambda request: response) as client:
+        with pytest.raises(httpx.ReadError):
+            client.send(httpx.Request("POST", NATIVE, content=RAW), stream=True)
+        assert response.is_closed
+    assert compression._latched_off is None
+
+
 @pytest.mark.parametrize("as_api_key", [False, True])
 def test_bearer_hook_mints_auth_on_compressed_request(as_api_key):
     def handler(request):
