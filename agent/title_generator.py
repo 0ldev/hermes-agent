@@ -60,6 +60,16 @@ MAX_DERIVED_TITLE_CHARS = 48
 _MAX_TITLE_WORDS = 12
 TITLE_TARGET_CHARS = 24
 TITLE_RETRY_ABOVE_CHARS = 28
+# CJK has no spaces, so the word guard sees a whole Chinese reply as a few "words" (#141969).
+_MAX_TITLE_CJK_CHARS = 20
+_CJK_RANGES = (
+    ("\u3000", "\u303f"),
+    ("\u3040", "\u30ff"),
+    ("\u3400", "\u4dbf"),
+    ("\u4e00", "\u9fff"),
+    ("\uac00", "\ud7af"),
+    ("\uff01", "\uff60"),
+)
 # Output budget for the title call: room for a fenced/prefixed JSON reply and for a reasoning model that
 # thinks despite the thinking-disabled request, without letting a runaway reply burn minutes.
 TITLE_MAX_TOKENS = 512
@@ -489,6 +499,16 @@ def _request_title(messages: list, *, timeout: Optional[float], main_runtime: di
     return _clean_title(_extract_title_text(message.content or "") or _title_from_reasoning(message))
 
 
+def _cjk_char_count(text: str) -> int:
+    """Characters written with CJK scripts or their punctuation in ``text``."""
+    return sum(1 for ch in text if any(lo <= ch <= hi for lo, hi in _CJK_RANGES))
+
+
+def _is_answer_shaped(title: str) -> bool:
+    """True when the model answered the user instead of titling the session."""
+    return len(title.split()) > _MAX_TITLE_WORDS or _cjk_char_count(title) > _MAX_TITLE_CJK_CHARS
+
+
 def generate_title(
     user_message: str,
     timeout: Optional[float] = None,
@@ -541,9 +561,9 @@ def generate_title(
         # something I recognize..."). Truncating would store half an assistant blob as the session title,
         # which is still an assistant blob — reject instead so the caller retries on the next exchange
         # (maybe_auto_title retries a placeholder title through the third exchange). Port of can1357/oh-my-pi#7306.
-        if title is not None and len(title.split()) > _MAX_TITLE_WORDS:
+        if title is not None and _is_answer_shaped(title):
             # Answer-shaped output: reject (not truncate) so the caller retries next exchange.
-            logger.debug("Rejecting answer-shaped title output (%d words > %d)", len(title.split()), _MAX_TITLE_WORDS)
+            logger.debug("Rejecting answer-shaped title output (%r)", title)
             return None
         # Example-echo guard: a title that parrots one of the prompt's own
         # examples back verbatim says nothing about the session — reject it so
