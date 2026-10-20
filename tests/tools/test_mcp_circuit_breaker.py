@@ -631,9 +631,9 @@ def test_application_open_breaker_blocks_only_the_rejected_tool(monkeypatch, tmp
 
     async def _call_tool(tool_name, arguments=None, **kw):
         result = MagicMock()
-        result.is_error = tool_name == "edit"
+        result.is_error = tool_name != "search"
         block = MagicMock()
-        block.text = "old_text not found" if tool_name == "edit" else "found 3 matches"
+        block.text = f"{tool_name}: old_text not found" if tool_name != "search" else "found 3 matches"
         result.content = [block]
         result.structured_content = None
         return result
@@ -642,6 +642,7 @@ def test_application_open_breaker_blocks_only_the_rejected_tool(monkeypatch, tmp
     _mcp_loop._ensure_mcp_loop()
     try:
         edit = _make_tool_handler("vault", "edit", 10.0)
+        patch = _make_tool_handler("vault", "patch", 10.0)
         search = _make_tool_handler("vault", "search", 10.0)
         for _ in range(mcp_tool._CIRCUIT_BREAKER_THRESHOLD):
             assert "old_text not found" in json.loads(edit({}))["error"]
@@ -651,6 +652,13 @@ def test_application_open_breaker_blocks_only_the_rejected_tool(monkeypatch, tmp
         tripped = json.loads(edit({}))["error"].lower()
         assert "rejected" in tripped and "unreachable" not in tripped, tripped
         assert mcp_tool._server_breaker_application_tool.get("vault") == {"edit"}
+
+        # A second broken tool that has not struck yet still dispatches; its rejection joins the
+        # blocked set, and neither tool's strike unblocks the other (no alternation escape).
+        assert "old_text not found" in json.loads(patch({}))["error"]
+        assert mcp_tool._server_breaker_application_tool.get("vault") == {"edit", "patch"}
+        assert "paused" in json.loads(edit({}))["error"].lower()
+        assert "paused" in json.loads(patch({}))["error"].lower()
         assert "found 3 matches" in json.loads(search({}))["result"]
 
         # The sibling tool's success is an unambiguous health signal: the breaker closes and the
@@ -663,49 +671,6 @@ def test_application_open_breaker_blocks_only_the_rejected_tool(monkeypatch, tmp
         mcp_tool._bump_server_error("vault", application=True, tool_name="edit")
         mcp_tool._bump_server_error("vault", application=True, tool_name="edit")
         assert "unreachable" in json.loads(search({}))["error"].lower()
-    finally:
-        _cleanup(mcp_tool, "vault")
-
-
-def test_application_open_breaker_blocks_every_struck_tool(monkeypatch, tmp_path):
-    """Every tool that struck in the streak stays blocked while the application breaker is open —
-    not just the most recent striker. Scoping to a single tool let a model alternating between two
-    persistently-rejected tools un-block each with the other's strikes, so every call still reached
-    the server and #10447's retry-storm protection never engaged (#114077)."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-    from tools import mcp_tool
-    from tools.mcp_tool_handlers import _make_tool_handler
-
-    async def _call_tool(tool_name, arguments=None, **kw):
-        result = MagicMock()
-        result.is_error = tool_name != "search"
-        block = MagicMock()
-        block.text = f"{tool_name} rejected" if tool_name != "search" else "found 3 matches"
-        result.content = [block]
-        result.structured_content = None
-        return result
-
-    _install_stub_server(mcp_tool, "vault", _call_tool)
-    _mcp_loop._ensure_mcp_loop()
-    try:
-        edit = _make_tool_handler("vault", "edit", 10.0)
-        patch = _make_tool_handler("vault", "patch", 10.0)
-        search = _make_tool_handler("vault", "search", 10.0)
-        for _ in range(mcp_tool._CIRCUIT_BREAKER_THRESHOLD):
-            assert "edit rejected" in json.loads(edit({}))["error"]
-
-        # The breaker is open, scoped to the struck tool. The second broken tool is still
-        # dispatchable (it has not struck yet) and its rejection adds it to the blocked set.
-        assert "patch rejected" in json.loads(patch({}))["error"]
-        assert mcp_tool._server_breaker_application_tool.get("vault") == {"edit", "patch"}
-
-        # Both struck tools now short-circuit; neither strike unlocks the other.
-        assert "paused" in json.loads(edit({}))["error"].lower()
-        assert "paused" in json.loads(patch({}))["error"].lower()
-
-        # The never-struck sibling keeps the recovery route open (#47851).
-        assert "found 3 matches" in json.loads(search({}))["result"]
     finally:
         _cleanup(mcp_tool, "vault")
 
