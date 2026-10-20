@@ -222,6 +222,26 @@ class TestGenerateTitle:
             assert len(title) == 80
             assert title.endswith("...")
 
+    @pytest.mark.parametrize(("replies", "stored", "calls"), [
+        (["Hermes-tern plugin update blocked by security scan", "hermes-tern plugin update"],
+         "hermes-tern plugin update", 2),
+        (["Hermes-tern plugin update blocked by security scan", "Hermes-tern plugin update blocked by the scan"],
+         "Hermes-tern plugin update blocked by the scan", 2),
+        (["Hermes-tern plugin update blocked by security scan", ""],
+         "Hermes-tern plugin update blocked by security scan", 2),
+        (["Tern charts: log files"], "Tern charts: log files", 1),
+    ])
+    def test_overlong_title_gets_one_shorter_retry(self, replies, stored, calls):
+        def response(text):
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = text
+            return resp
+
+        with patch("agent.title_generator.call_llm", side_effect=[response(r) for r in replies]) as call_llm:
+            assert generate_title("question") == stored
+        assert call_llm.call_count == calls
+
     def test_rejects_answer_shaped_output(self):
         """A model that ignores the titling task and answers the user's
         message returns a full sentence; without a word bound the whole
