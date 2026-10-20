@@ -58,9 +58,11 @@ MAX_DERIVED_TITLE_CHARS = 48
 # answer-shaped output guard in generate_title; port of can1357/oh-my-pi#7306). 12 leaves headroom for
 # legitimate wordy titles while excluding full-sentence answers.
 _MAX_TITLE_WORDS = 12
-# Model titles must fit the Desktop sidebar row (about 28 characters before the ellipsis). Models overshoot
-# a length asked for in the prompt (a real-session eval: 49 of 60 current titles were longer), so the
-# reply is also fitted in code by dropping whole trailing words.
+# The Desktop sidebar title column is ~150px of 13px text, about 23 characters of real titles (6.5px each).
+# The prompt aims there; the code cap is looser because cutting a 26-character title down to 23 drops its
+# head noun ("Partner birthday dinner" -> "Partner birthday"), which reads worse than the sidebar's own
+# ellipsis on a subject-first title. Models overshoot a prompt-only rule, so the cap is enforced in code.
+TITLE_TARGET_CHARS = 24
 MAX_MODEL_TITLE_CHARS = 28
 # A fitted title never ends on a word that only joins what was dropped ("Plugin update and").
 _DANGLING_TAIL_WORDS = frozenset(
@@ -107,7 +109,7 @@ _TITLE_PROMPT_TEMPLATE = (
     "You name chat sessions. Given the user's opening message, write a title "
     "that lets them find this conversation again in a narrow sidebar list.\n\n"
     "Rules:\n"
-    f"- 2 to 4 words, at most {MAX_MODEL_TITLE_CHARS} characters, sentence case "
+    f"- 2 to 4 words, at most {TITLE_TARGET_CHARS} characters, sentence case "
     "(capitalize only the first word and proper nouns).\n"
     "- Lead with the specific subject: the file, feature, command, error, product, or PR number.\n"
     "- Do not start with a generic verb (Check, Fix, Review, Locate, Investigate, Help, Explain).\n"
