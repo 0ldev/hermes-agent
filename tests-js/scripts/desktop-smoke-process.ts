@@ -234,6 +234,47 @@ export function localBackendProcess(port: number, electronPid: number, hermesHom
   const matches = candidates.filter((child: NativeProcess): boolean => pids.includes(child.pid))
 
   if (matches.length !== 1) {
+    try {
+      const byPid = new Map(processes.map(p => [p.pid, p]))
+      const chain = (pid: number): string => {
+        const out: string[] = []
+        for (let cur = byPid.get(pid), n = 0; cur && n < 12; cur = byPid.get(cur.parentPid), n++) { out.push(`${cur.pid}(${cur.executable})`) }
+        return out.join(' <- ')
+      }
+      let owners: number[] = []
+      if (process.platform === 'linux') {
+        const inodes = new Set<string>()
+        for (const filename of ['/proc/net/tcp', '/proc/net/tcp6']) {
+          for (const line of fs.readFileSync(filename, 'utf8').split('\n').slice(1)) {
+            const f = line.trim().split(/\s+/)
+            if (f[3] === '0A' && Number.parseInt(f[1].split(':')[1], 16) === port) { inodes.add(`socket:[${f[9]}]`) }
+          }
+        }
+        console.error(`[diag] listening inodes on ${port}: ${[...inodes].join(',') || 'NONE'}`)
+        for (const p of processes) {
+          try { if (fs.readdirSync(`/proc/${p.pid}/fd`).some(fd => { try { return inodes.has(fs.readlinkSync(`/proc/${p.pid}/fd/${fd}`)) } catch { return false } })) { owners.push(p.pid) } } catch { /* gone */ }
+        }
+      } else if (process.platform === 'darwin') {
+        owners = pids
+      }
+      console.error(`[diag] electronPid=${electronPid} children=${children.map(c => c.pid).join(',')} registered=${registered.join(',')} pids=${pids.join(',')}`)
+      for (const o of owners) {
+        let cmd = ''
+        try { cmd = fs.readFileSync(`/proc/${o}/cmdline`, 'utf8').split('\0').join(' ') } catch { /* */ }
+        console.error(`[diag] owner ${o}: ${chain(o)} :: ${cmd.slice(0, 400)}`)
+      }
+      console.error(`[diag] electron chain: ${chain(electronPid)}`)
+      for (const c of children) { console.error(`[diag] child ${c.pid} ppid=${c.parentPid} ${c.executable}`) }
+      if (hermesHome) {
+        const ledgerRoot = resolveDesktopHermesHome({ home: os.homedir(), env: { HERMES_HOME: hermesHome } })
+        const lp = path.join(ledgerRoot, SPAWN_LEDGER_FILENAME)
+        console.error(`[diag] hermesHome=${hermesHome} ledger=${lp} exists=${fs.existsSync(lp)}`)
+        try { console.error(`[diag] ledger content: ${fs.readFileSync(lp, 'utf8').slice(0, 3000)}`) } catch (e) { console.error(`[diag] ledger read: ${String(e)}`) }
+        for (const cand of [hermesHome, path.join(os.homedir(), '.hermes')]) {
+          try { console.error(`[diag] ls ${cand}: ${fs.readdirSync(cand).join(' ')}`) } catch { /* */ }
+        }
+      }
+    } catch (e) { console.error(`[diag] failed: ${String(e)}`) }
     throw new Error(`Expected one Desktop-owned or registered host backend listener on port ${port}; found ${matches.length}`)
   }
 
