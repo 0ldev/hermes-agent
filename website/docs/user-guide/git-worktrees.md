@@ -255,7 +255,7 @@ sweep.
 Run from inside one of the trees (`cd .worktrees/lane-x`), every `hermes
 worktree` / `/worktree` command and `hermes -w` work on the main checkout's
 `.worktrees/`, as if you had run them from the repository root. The tree you
-are standing in is always kept (`current working tree`).
+are standing in is always kept (`in use as the current working tree`).
 
 ```yaml
 worktrees:

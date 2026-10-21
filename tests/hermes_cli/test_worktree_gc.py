@@ -414,7 +414,7 @@ class TestStartedInsideLinkedTree:
         records = worktree_gc.audit_worktrees(root, with_sizes=False)
         assert _verdict(records, "hermes-sibling").verdict == "reap"
         assert (_verdict(records, "hermes-here").verdict, _verdict(records, "hermes-here").reason) == (
-            "keep", "current working tree")
+            "keep", "in use as the current working tree")
 
     def test_classic_startup_sweep_spares_the_tree_it_runs_in(self, repo, monkeypatch):
         from hermes_cli import worktree_ops
