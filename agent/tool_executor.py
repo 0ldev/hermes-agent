@@ -563,6 +563,11 @@ def _registered_tool_worker(agent):
     tid = threading.current_thread().ident
     with agent._tool_worker_threads_lock:
         agent._tool_worker_threads.add(tid)
+    # A redirect that landed during an earlier tool of this batch fanned its yield out to tids that
+    # have since exited; without this a later wait/command parks the user's message (codex#55644).
+    if getattr(agent, "_steer_yield_pending", False) and getattr(agent, "_pending_steer", None):
+        from tools.interrupt import request_yield
+        request_yield(tid)
     try:
         yield tid
     finally:

@@ -98,6 +98,8 @@ def _steer_parts(agent) -> list:
 
 
 def _set_steer_parts(agent, parts: list) -> None:
+    if not parts:
+        agent._steer_yield_pending = False
     agent._pending_steer_parts = parts
     agent._pending_steer = "\n".join(text for _, text in parts) or None
 
@@ -350,6 +352,10 @@ class InterruptControlMixin:
         if getattr(self, "_executing_tools", False):
             accepted = self.steer(cleaned)
             if accepted:
+                # Set before the fan-out: a worker that registers after it (the next tool in a
+                # sequential batch) reads this in ``_registered_tool_worker`` and yields too, until
+                # the steer is drained (``_set_steer_parts`` clears it).
+                self._steer_yield_pending = True
                 tracker = getattr(self, "_tool_worker_threads", None)
                 tracker_lock = getattr(self, "_tool_worker_threads_lock", None)
                 if tracker is not None and tracker_lock is not None:
