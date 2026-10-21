@@ -83,16 +83,32 @@ def spawn_unmanaged_gateway(profile_home: Path, *, deadline: float, idle_exit: b
 
 
 def _debug_spawn_diag(exc: OSError, command: list, root) -> str:  # DEBUG ONLY, not for merge
-    parts = [type(exc).__name__, f"winerror={getattr(exc, 'winerror', None)}", f"errno={exc.errno}",
-             f"file={exc.filename!r}", f"cmd0={command[0]!r}", f"cmd0_exists={os.path.exists(command[0])}",
-             f"cwd_exists={os.path.isdir(str(root))}"]
+    parts = [type(exc).__name__, f"winerror={getattr(exc, 'winerror', None)}",
+             f"cmd0_exists={os.path.exists(command[0])}"]
+    from hermes_cli._subprocess_compat import windows_detach_flags, windows_detach_flags_without_breakaway
+    for label, flags in (("brk", windows_detach_flags()), ("nobrk", windows_detach_flags_without_breakaway())):
+        try:
+            subprocess.Popen(["cmd.exe", "/c", "exit", "0"], cwd=root, creationflags=flags,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).wait(10)
+            parts.append(f"probe_{label}=ok")
+        except OSError as e:
+            parts.append(f"probe_{label}={type(e).__name__}:{getattr(e, 'winerror', None)}")
+        try:
+            subprocess.Popen(["cmd.exe", "/c", "exit", "0"], creationflags=flags,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).wait(10)
+            parts.append(f"probe_{label}_nocwd=ok")
+        except OSError as e:
+            parts.append(f"probe_{label}_nocwd={type(e).__name__}:{getattr(e, 'winerror', None)}")
     try:
         import ctypes
         from ctypes import wintypes
+        import psutil
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        in_job = wintypes.BOOL()
-        k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(in_job))
-        parts.append(f"in_job={bool(in_job.value)}")
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
 
         class BASIC(ctypes.Structure):
             _fields_ = [("a", wintypes.LARGE_INTEGER), ("b", wintypes.LARGE_INTEGER), ("LimitFlags", wintypes.DWORD),
@@ -100,21 +116,22 @@ def _debug_spawn_diag(exc: OSError, command: list, root) -> str:  # DEBUG ONLY, 
                         ("f", ctypes.c_void_p), ("g", wintypes.DWORD), ("h", wintypes.DWORD)]
         info = BASIC()
         ok = k32.QueryInformationJobObject(None, 2, ctypes.byref(info), ctypes.sizeof(info), None)
-        parts.append(f"job_flags={hex(info.LimitFlags) if ok else 'q_failed:' + str(ctypes.get_last_error())}")
-    except Exception as e:  # noqa: BLE001
-        parts.append(f"jobq_err={e!r}")
-    try:
-        import psutil
+        parts.append(f"self_job_flags={hex(info.LimitFlags) if ok else 'none:' + str(ctypes.get_last_error())}")
         chain, p = [], psutil.Process()
-        for _ in range(8):
-            chain.append(f"{p.pid}:{p.name()}")
+        for _ in range(12):
+            h = k32.OpenProcess(0x1000, False, p.pid)
+            res = wintypes.BOOL()
+            okj = k32.IsProcessInJob(h, None, ctypes.byref(res)) if h else 0
+            if h:
+                k32.CloseHandle(h)
+            chain.append(f"{p.pid}:{p.name()}:{'J' if (okj and res.value) else ('-' if okj else '?')}")
             p = p.parent()
             if p is None:
                 break
         parts.append("chain=" + ">".join(chain))
     except Exception as e:  # noqa: BLE001
-        parts.append(f"chain_err={e!r}")
-    return "|".join(parts).replace(" ", "_")[:900]
+        parts.append(f"diag_err={e!r}")
+    return "|".join(parts).replace(" ", "_")[:1200]
 
 
 def stdio_log_path(profile_home: Path) -> Path:
