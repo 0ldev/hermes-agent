@@ -104,6 +104,12 @@ def _set_steer_parts(agent, parts: list) -> None:
     agent._pending_steer = "\n".join(text for _, text in parts) or None
 
 
+def steer_yield_pending(agent) -> bool:
+    """Whether a redirect's steer is still undelivered, so a newly registered tool worker yields."""
+    with _ic_lock(agent, "_pending_steer_lock"):
+        return bool(getattr(agent, "_steer_yield_pending", False) and _steer_parts(agent))
+
+
 def _steer_fates(agent) -> dict:
     """``{ticket: consumed}`` for ticketed steers that left the buffer: True when a drain handed the text
     to the turn, False when it was dropped unread. ``withdraw_steer`` reads each one once."""
@@ -350,20 +356,21 @@ class InterruptControlMixin:
         # `sleep` poller, a build), so ask the tool workers to YIELD: terminal hands the live
         # process to the background registry and returns; tools that don't yield are unaffected.
         if getattr(self, "_executing_tools", False):
-            accepted = self.steer(cleaned)
-            if accepted:
-                # Set before the fan-out: a worker that registers after it (the next tool in a
-                # sequential batch) reads this in ``_registered_tool_worker`` and yields too, until
-                # the steer is drained (``_set_steer_parts`` clears it).
+            # Queue the steer and mark its yield in one locked step, before the fan-out: a worker
+            # that registers later (the next tool in a sequential batch) reads the pair through
+            # ``steer_yield_pending`` and yields too, until a drain empties the buffer and clears it.
+            with _ic_lock(self, "_pending_steer_lock"):
+                _set_steer_parts(self, _steer_parts(self) + [(None, cleaned)])
                 self._steer_yield_pending = True
-                tracker = getattr(self, "_tool_worker_threads", None)
-                tracker_lock = getattr(self, "_tool_worker_threads_lock", None)
-                if tracker is not None and tracker_lock is not None:
-                    with tracker_lock:
-                        worker_tids = list(tracker)
-                    for tid in worker_tids:
-                        _request_yield(tid)
-            return accepted
+            self._turn_user_intervened = True
+            tracker = getattr(self, "_tool_worker_threads", None)
+            tracker_lock = getattr(self, "_tool_worker_threads_lock", None)
+            if tracker is not None and tracker_lock is not None:
+                with tracker_lock:
+                    worker_tids = list(tracker)
+                for tid in worker_tids:
+                    _request_yield(tid)
+            return True
 
         _model_active = getattr(self, "_model_request_active", None)
         with _ic_lock(self, "_pending_redirect_lock"):
