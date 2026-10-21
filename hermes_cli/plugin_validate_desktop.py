@@ -80,7 +80,10 @@ def _mask_regex_literals(source: str) -> str:
     return _REGEXP_CTOR_MATCHER.sub(lambda m: " " * len(m.group(0)), masked)
 
 
-_PROTOTYPE_WRITE = re.compile(r"\b([A-Za-z_$][\w$]*)\.prototype\.[\w$]+\s*=[^=]")
+# ``(?<![\w$])``, not ``\b``: there is no word boundary before ``$``, so ``$t.prototype`` would read as
+# ``t`` (a class never declared) and a bare ``$`` receiver would not match at all. A ``.`` may precede
+# the receiver (``window.Storage.prototype.x =`` names ``Storage``).
+_PROTOTYPE_WRITE = re.compile(r"(?<![\w$])([A-Za-z_$][\w$]*)\.prototype\.[\w$]+\s*=[^=]")
 _RENDERER_GLOBAL_NAMES = (
     r"Object|Function|Array|String|Number|Boolean|Symbol|Promise|RegExp|Date|Error|JSON|Map|Set"
     r"|WeakMap|WeakSet|Proxy|Reflect|Storage|Window|Document|Node|EventTarget|Event|Location|History"

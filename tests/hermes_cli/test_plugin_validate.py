@@ -399,6 +399,20 @@ class TestDesktopSurface:
             "prototype patching (desktop/plugin.js:40)",
         ]
 
+    def test_dollar_named_receivers_are_read_whole(self, tmp_path):
+        """Minifiers name classes ``$t``: three.js' ``var $t=class{...};$t.prototype.ValueTypeName=""``
+        is the bundle's own class, and ``$`` aliasing a renderer global is still prototype patching."""
+        d = self._desktop_plugin(tmp_path, (
+            'var $t=class{constructor(e){this.name=e}};$t.prototype.ValueTypeName="";\n'
+            "var $n=class extends $t{};$n.prototype.ValueBufferType=Array;\n"
+            "var $=window.Storage;$.prototype.setItem=noop\n"
+            "var a$=window.Storage;a$.prototype.setItem=noop\n"
+        ))
+        assert desktop_surface_hits(d) == [
+            "prototype patching (desktop/plugin.js:3)",
+            "prototype patching (desktop/plugin.js:4)",
+        ]
+
     def test_node_sidecar_and_test_mjs_outside_desktop_are_not_the_surface(self, tmp_path):
         """A tools plugin with a Node sidecar (``sidecar/*.mjs`` lazily importing a lockfile-pinned
         dependency) and ``tests/*.test.mjs`` has no Desktop surface: the lint stays silent, and the
