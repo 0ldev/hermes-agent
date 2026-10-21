@@ -325,15 +325,20 @@ wake = [
   # Its universal2 wheel contains an ARM64-only library, so Intel Macs cannot
   # load it. There is no native Windows ARM64 wheel either.
   "pyopen-wakeword==1.1.0; (platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')",
-  "sherpa-onnx==1.13.8",
+  # TODO(astral-sh/uv#22805): uv does not count Android wheels toward an
+  # Android fork. Since uv 0.12.14, that makes uv reject sherpa-onnx-core,
+  # which has no sdist, in this lock's Android fork. Until PM pins a uv
+  # release with the fix, the four sherpa engine pins below skip Android,
+  # here and in [wake-sherpa], and PM gates [wake-sherpa] off Android.
+  "sherpa-onnx==1.13.8; sys_platform != 'android'",
   # uv reads sherpa-onnx metadata from its cp311-linux_armv7l wheel, which
   # omits this pin. Every wheel the bundles install requires it. Without the
   # pin a frozen sync installs sherpa-onnx alone, and desktop dependency
   # preparation fails on `uv pip check`.
-  "sherpa-onnx-core==1.13.8",
+  "sherpa-onnx-core==1.13.8; sys_platform != 'android'",
   # text2token imports both tokenizers even for English phrases.
-  "sentencepiece==0.2.2",
-  "pypinyin==0.55.0",
+  "sentencepiece==0.2.2; sys_platform != 'android'",
+  "pypinyin==0.55.0; sys_platform != 'android'",
   "pvporcupine==4.0.3",
   "sounddevice==0.5.5",
   "numpy==2.4.3",
@@ -358,11 +363,12 @@ wake-openwakeword = [
   "pyopen-wakeword==1.1.0; (platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')",
 ]
 wake-sherpa = [
-  "sherpa-onnx==1.13.8",
+  # TODO(astral-sh/uv#22805): the Android markers follow [wake].
+  "sherpa-onnx==1.13.8; sys_platform != 'android'",
   # Required by the sherpa-onnx wheel. See [wake] for why it is explicit.
-  "sherpa-onnx-core==1.13.8",
-  "sentencepiece==0.2.2",
-  "pypinyin==0.55.0",
+  "sherpa-onnx-core==1.13.8; sys_platform != 'android'",
+  "sentencepiece==0.2.2; sys_platform != 'android'",
+  "pypinyin==0.55.0; sys_platform != 'android'",
 ]
 wake-porcupine = ["pvporcupine==4.0.3"]
 # Google Chat service account push (gateway/platforms/google_chat) — pubsub
@@ -595,6 +601,9 @@ matrix = "sys_platform == 'linux'"
 google-chat = "platform_machine != 'ARM64' or sys_platform != 'win32'"
 # Match the engine dependency markers so PM refuses an unsupported install.
 wake-openwakeword = "(platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')"
+# TODO(astral-sh/uv#22805): see [wake]. Remove this gate together with the
+# Android markers on the sherpa engine pins.
+wake-sherpa = "sys_platform != 'android'"
 # faster-whisper's closure is prebuilt-only: ctranslate2 has no win_arm64 wheel, onnxruntime
 # none for darwin-x64, and neither has an Android build. Its ANCHOR is faster_whisper, so an unsupported machine could install the
 # extra, rebuild the whole dependency environment and still fail the anchor on every retry.
