@@ -104,6 +104,8 @@ def record_response_usage(
     # OWN model rate and added as dollars below.
     aggregator_usage = canonical_usage
     _moa_client, canonical_usage, _moa_ref_cost = _fold_moa_usage(agent, canonical_usage)
+    from agent.prompt_cache_window import stamp_prompt_cache_activity
+    stamp_prompt_cache_activity(agent, aggregator_usage, api_duration)
     prompt_tokens = canonical_usage.prompt_tokens
     completion_tokens = canonical_usage.output_tokens
     total_tokens = canonical_usage.total_tokens
