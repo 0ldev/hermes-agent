@@ -77,7 +77,44 @@ def spawn_unmanaged_gateway(profile_home: Path, *, deadline: float, idle_exit: b
                                     **windows_detach_popen_kwargs())
     except OSError as exc:
         reason = "windows_breakaway_unavailable" if sys.platform == "win32" else "spawn_failed"
+        if sys.platform == "win32":
+            reason += ":" + _debug_spawn_diag(exc, command, root)
         raise RuntimeStartError(reason) from exc
+
+
+def _debug_spawn_diag(exc: OSError, command: list, root) -> str:  # DEBUG ONLY, not for merge
+    parts = [type(exc).__name__, f"winerror={getattr(exc, 'winerror', None)}", f"errno={exc.errno}",
+             f"file={exc.filename!r}", f"cmd0={command[0]!r}", f"cmd0_exists={os.path.exists(command[0])}",
+             f"cwd_exists={os.path.isdir(str(root))}"]
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        in_job = wintypes.BOOL()
+        k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(in_job))
+        parts.append(f"in_job={bool(in_job.value)}")
+
+        class BASIC(ctypes.Structure):
+            _fields_ = [("a", wintypes.LARGE_INTEGER), ("b", wintypes.LARGE_INTEGER), ("LimitFlags", wintypes.DWORD),
+                        ("c", ctypes.c_size_t), ("d", ctypes.c_size_t), ("e", wintypes.DWORD),
+                        ("f", ctypes.c_void_p), ("g", wintypes.DWORD), ("h", wintypes.DWORD)]
+        info = BASIC()
+        ok = k32.QueryInformationJobObject(None, 2, ctypes.byref(info), ctypes.sizeof(info), None)
+        parts.append(f"job_flags={hex(info.LimitFlags) if ok else 'q_failed:' + str(ctypes.get_last_error())}")
+    except Exception as e:  # noqa: BLE001
+        parts.append(f"jobq_err={e!r}")
+    try:
+        import psutil
+        chain, p = [], psutil.Process()
+        for _ in range(8):
+            chain.append(f"{p.pid}:{p.name()}")
+            p = p.parent()
+            if p is None:
+                break
+        parts.append("chain=" + ">".join(chain))
+    except Exception as e:  # noqa: BLE001
+        parts.append(f"chain_err={e!r}")
+    return "|".join(parts).replace(" ", "_")[:900]
 
 
 def stdio_log_path(profile_home: Path) -> Path:
