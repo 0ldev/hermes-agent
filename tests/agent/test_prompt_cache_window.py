@@ -15,15 +15,20 @@ def test_window_follows_the_last_cache_hit_and_dies_with_the_route(monkeypatch):
     import agent.prompt_cache_window as pcw
 
     monkeypatch.setattr(pcw.time, "time", lambda: 1_000.0)
-    agent = _agent()
-    stamp_prompt_cache_activity(agent, SimpleNamespace(cache_read_tokens=0, cache_write_tokens=0), 2.0)
+    agent = _agent(_api_attempt_started_at=996.0)  # the successful attempt's send time, not the retry loop's
+    dest = {"model": agent.model, "provider": agent.provider}
+    stamp_prompt_cache_activity(agent, SimpleNamespace(cache_read_tokens=0, cache_write_tokens=0), **dest)
     assert prompt_cache_window(agent) is None  # nothing cached (prompt under the cacheable minimum)
 
-    stamp_prompt_cache_activity(agent, SimpleNamespace(cache_read_tokens=9_000, cache_write_tokens=0), 4.0)
+    stamp_prompt_cache_activity(agent, SimpleNamespace(cache_read_tokens=9_000, cache_write_tokens=0), **dest)
     assert prompt_cache_window(agent) == {"ttl": "5m", "ttl_seconds": 300, "refreshed_at": 996.0, "expires_at": 1_296.0}
 
-    agent._cache_ttl = "1h"
-    assert prompt_cache_window(agent)["expires_at"] == 996.0 + 3600
+    # MoA: the TTL is clamped for the aggregator that holds the cache (Qwen on Alibaba caps 1h at 5m).
+    moa = _agent(model="my-preset", provider="moa", _cache_ttl="1h", _api_attempt_started_at=996.0)
+    stamp_prompt_cache_activity(moa, SimpleNamespace(cache_read_tokens=9_000, cache_write_tokens=0),
+                                model="qwen3-max", provider="alibaba")
+    assert prompt_cache_window(moa)["ttl"] == "5m"
+
     agent.model = "gpt-5.5"  # /model switch: a different cache, the old stamp must not carry over
     assert prompt_cache_window(agent) is None
     agent.model, agent._use_prompt_caching = "claude-sonnet-4-5", False  # unpublished retention: no guess

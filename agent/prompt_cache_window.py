@@ -17,19 +17,24 @@ from agent.i18n import t
 _TTL_SECONDS = {"5m": 300, "1h": 3600}
 
 
-def stamp_prompt_cache_activity(agent: Any, usage: Any, api_duration: float) -> None:
+def stamp_prompt_cache_activity(agent: Any, usage: Any, *, model: str, provider: str) -> None:
     """Record that the provider just read or wrote this session's cached prefix.
 
-    The TTL restarts when the request is processed, so the stamp is the send time
-    (response time minus latency), which errs toward an earlier expiry. The model and
-    provider are kept so a ``/model`` switch (a different cache) never inherits it.
+    ``model``/``provider`` are the request's real destination (the MoA aggregator slot, not
+    the virtual preset), so the TTL is clamped for the route that holds the cache. The TTL
+    restarts when the successful attempt is sent (``_api_attempt_started_at``); retries and
+    their waits before it never shorten the countdown. The display route is kept too, so a
+    ``/model`` switch or fallback (a different cache) never inherits the stamp.
     """
     if int(getattr(usage, "cache_read_tokens", 0) or 0) + int(getattr(usage, "cache_write_tokens", 0) or 0) <= 0:
         return
+    from agent.prompt_caching import effective_cache_ttl
+
+    ttl = effective_cache_ttl(getattr(agent, "_cache_ttl", None), model=model or "", provider=provider or "")
     agent._prompt_cache_stamp = {
-        "refreshed_at": time.time() - max(0.0, float(api_duration or 0.0)),
-        "model": getattr(agent, "model", "") or "",
-        "provider": getattr(agent, "provider", "") or "",
+        "refreshed_at": float(getattr(agent, "_api_attempt_started_at", None) or time.time()),
+        "ttl": ttl,
+        "route": (getattr(agent, "model", "") or "", getattr(agent, "provider", "") or ""),
     }
 
 
@@ -39,16 +44,13 @@ def prompt_cache_window(agent: Any) -> Optional[dict[str, Any]]:
     stamp = getattr(agent, "_prompt_cache_stamp", None)
     if not isinstance(stamp, dict) or not getattr(agent, "_use_prompt_caching", False):
         return None
-    if (stamp.get("model"), stamp.get("provider")) != (getattr(agent, "model", "") or "", getattr(agent, "provider", "") or ""):
+    if stamp.get("route") != (getattr(agent, "model", "") or "", getattr(agent, "provider", "") or ""):
         return None
-    from agent.prompt_caching import effective_cache_ttl
-
-    ttl = effective_cache_ttl(getattr(agent, "_cache_ttl", None), model=stamp["model"], provider=stamp["provider"])
-    seconds = _TTL_SECONDS.get(ttl)
+    seconds = _TTL_SECONDS.get(stamp.get("ttl"))
     if not seconds:
         return None
     refreshed_at = float(stamp["refreshed_at"])
-    return {"ttl": ttl, "ttl_seconds": seconds, "refreshed_at": refreshed_at, "expires_at": refreshed_at + seconds}
+    return {"ttl": stamp["ttl"], "ttl_seconds": seconds, "refreshed_at": refreshed_at, "expires_at": refreshed_at + seconds}
 
 
 def _duration(seconds: float) -> str:
