@@ -1300,13 +1300,9 @@ class HermesCLI(CLIInitMixin, CLITuiRuntimeMixin, CLIProcessNotificationsMixin, 
             _cprint(f"\033[1;31m{_t('cli.plugin.command_error', error=str(e))}{_RST}")
 
     def _queue_skill_message(self, msg) -> None:
-        images = getattr(self, "_slash_submit_images", None) or None
-        payload = (msg, list(images)) if images else msg
-        if images:
-            # One skill turn consumes the composer images; a later queue stays text-only.
-            self._slash_submit_images = None
         if hasattr(self, '_pending_input'):
-            self._pending_input.put(payload)
+            from hermes_cli.cli_commands_session_tools import queue_slash_turn
+            queue_slash_turn(self, msg)
 
     def _run_skill_bundle_command(self, base_cmd: str, bundle_info: dict, user_instruction: str) -> None:
         """``/<bundle>`` loads several skills at once (bundles win over same-named skills)."""
