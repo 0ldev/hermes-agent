@@ -32,12 +32,14 @@ def _cli(process_command):
     lambda cli: cli._queue_skill_message("QUEUED TURN"),          # /<skill> ...
     lambda cli: cli._kick_goal("QUEUED TURN"),                    # /goal <objective>
     lambda cli: cli._queue_prompt_turn("QUEUED TURN", "/plan"),   # /plan, /learn, /init
-], ids=["skill", "goal", "plan"])
+    lambda cli: setattr(cli, "_pending_agent_seed", "QUEUED TURN"),  # seed-returning commands
+], ids=["skill", "goal", "plan", "seed"])
 def test_turn_queuing_slash_command_carries_the_attached_images(queue_turn):
     cli = _cli(lambda cli, text: queue_turn(cli))
 
     cli._tui_process_one_input(("/cmd look at this screenshot", ["shot.png"]))
-    cli._tui_process_one_input(cli._pending_input.get_nowait())
+    if not cli._pending_input.empty():
+        cli._tui_process_one_input(cli._pending_input.get_nowait())
 
     assert cli.seen == [("QUEUED TURN", ["shot.png"])]
     assert cli._pending_input.empty() and cli._attached_images == []
