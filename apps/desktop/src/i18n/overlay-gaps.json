@@ -1051,6 +1051,8 @@
   "prompts.vaultUnlockTitle": ["ru"],
   "rightSidebar.terminalCloseAll": ["ar"],
   "rightSidebar.terminalCloseOthers": ["ar"],
+  "rightSidebar.terminalDropControl": ["ar","de","es","fr","ja","ru","zh","zh-hant"],
+  "rightSidebar.terminalDropControlTitle": ["ar","de","es","fr","ja","ru","zh","zh-hant"],
   "rightSidebar.terminalDropTooLarge": ["ar","de","es","fr","ja","ru","zh","zh-hant"],
   "rightSidebar.terminalDropTooLargeTitle": ["ar","de","es","fr","ja","ru","zh","zh-hant"],
   "rightSidebar.terminalDropUploadFailed": ["ar","de","es","fr","ja","ru","zh","zh-hant"],
