@@ -105,5 +105,7 @@ class TestEdgeCases:
             "o3mega",
             "o4custom",
             "vendor/o1clone",
+            "gpt-55",  # a dotless two-digit version is not the gpt-5 family
+            "gpt-6o",
         ):
             assert model_forces_max_completion_tokens(model) is False
