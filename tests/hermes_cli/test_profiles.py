@@ -424,6 +424,21 @@ class TestCreateProfile:
             assert not (cloned_browser / process_marker).exists(), process_marker
         assert (cloned_browser / "Default" / "Cookies").read_text(encoding="utf-8-sig") == "jar"
 
+    def test_clone_all_does_not_share_the_source_webapp_browser_credential(self, profile_env):
+        """The Webapp's browser credential belongs to one gateway: a clone mints its own on first
+        use, so signing one profile's browsers out never leaves them signed in to the other."""
+        from gateway.webapp_listener import TOKEN_PATH, browser_session_token
+
+        default_home = profile_env / ".hermes"
+        (default_home / "config.yaml").write_text("model: test", encoding="utf-8")
+        source_token = browser_session_token(default_home)
+
+        profile_dir = create_profile("coder", clone_all=True, no_alias=True)
+
+        assert not (profile_dir / TOKEN_PATH).exists()
+        assert browser_session_token(profile_dir) != source_token
+        assert browser_session_token(default_home) == source_token
+
     @pytest.mark.platforms("linux")
     def test_clone_all_does_not_attach_to_the_source_profiles_live_browser(self, profile_env):
         """Copied Chromium markers must not route the clone through the source profile's CDP port."""

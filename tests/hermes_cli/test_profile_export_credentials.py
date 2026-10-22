@@ -37,9 +37,10 @@ _EXTRA_STORES = {
     "browser-profiles/live/Default/Cookies", "browser_profiles/default/Default/Login Data",
     "mcp-tokens/srv.json", "vault/vault.key", "platforms/pairing/approved.json", "slack_tokens.json",
     "webhook_subscriptions.json", ".ssh/id_rsa", ".aws/credentials", ".gnupg/x", ".kube/config", ".envrc",
+    "webapp/session-token",  # the Webapp browser's credential (gateway.webapp_listener.TOKEN_PATH)
 }
 # Single-file stores whose name has no dot; every other dotless store is a token directory.
-_DOTLESS_FILES = {"npmrc"}
+_DOTLESS_FILES = {"npmrc", "webapp/session-token"}
 # Dot-named stores that are directories: the OS credential dirs shared with file_safety.
 _DOT_DIRS = set(HOME_CREDENTIAL_DIRS)
 
