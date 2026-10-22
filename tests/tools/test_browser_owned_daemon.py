@@ -86,6 +86,27 @@ def test_daemon_and_chromium_groups_are_registered_once(tmp_path, session, calls
     daemon.wait(timeout=10)
 
 
+def test_an_owned_daemon_skips_the_identity_checks_and_an_exited_one_is_forgotten(tmp_path, session, calls,
+                                                                                    monkeypatch):
+    name, socket_dir, procs = session
+    daemon, chromium = _spawn_daemon(tmp_path, socket_dir, name)
+    procs += [daemon.pid, chromium]
+    lifecycle._own_local_daemon(name)
+
+    def _never(*_a):
+        raise AssertionError("an already-owned daemon was re-verified on a later command")
+    monkeypatch.setattr(lifecycle, "_verify_reapable_browser_daemon", _never)
+    monkeypatch.setattr(lifecycle, "spawned_by_this_process", _never)
+    lifecycle._own_local_daemon(name)  # steady state: pid-file read and children rescan only
+    assert calls == [("register", sorted([daemon.pid, chromium]))]
+
+    (socket_dir / f"{name}.pid").unlink()  # the daemon idled out and removed its pid file
+    lifecycle._own_local_daemon(name)
+    assert name not in lifecycle._owned_session_groups
+    daemon.kill()
+    daemon.wait(timeout=10)
+
+
 def test_a_pid_file_naming_an_unbound_process_is_never_registered(tmp_path, session, calls):
     name, socket_dir, procs = session
     # A detached process of ours that is not bound to this session's socket dir.

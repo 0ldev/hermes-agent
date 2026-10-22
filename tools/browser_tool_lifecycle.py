@@ -660,20 +660,28 @@ def _own_local_daemon(session_name: str) -> None:
     """Hand this session's verified daemon and Chromium groups to the owner-death supervisor.
 
     Called after every local command, because the daemon starts lazily on the first one and can
-    relaunch Chromium later; already-registered groups cost one set lookup. Never raises."""
+    relaunch Chromium later. A daemon already owned skips the identity and spawn-tag checks and only
+    rescans its children for a relaunched Chromium; a daemon that exited drops the session's entry.
+    Never raises."""
     if os.name != "posix" or not session_name:
         return
     import psutil
 
     socket_dir = os.path.join(_bt._socket_safe_tmpdir(), f"agent-browser-{session_name}")
+    daemon_pid = _read_pid_file(os.path.join(socket_dir, f"{session_name}.pid"))
+    if daemon_pid is None:
+        _release_owned_daemon(session_name, timeout=0)  # it exited (idle timeout): forget the session
+        return
+    with _owned_session_groups_lock:
+        known = daemon_pid in _owned_session_groups.get(session_name, ())
     try:
-        daemon_pid = int(Path(socket_dir, f"{session_name}.pid").read_text(encoding="utf-8-sig").strip())
-        if os.getpgid(daemon_pid) != daemon_pid:  # windows-footgun: ok — posix-only, returned above
-            return
-        if not _verify_reapable_browser_daemon(daemon_pid, socket_dir, session_name):
-            return
-        if not spawned_by_this_process(daemon_pid):
-            return  # started by another Hermes sharing this session: that Hermes owns it
+        if not known:
+            if os.getpgid(daemon_pid) != daemon_pid:  # windows-footgun: ok — posix-only, returned above
+                return
+            if not _verify_reapable_browser_daemon(daemon_pid, socket_dir, session_name):
+                return
+            if not spawned_by_this_process(daemon_pid):
+                return  # started by another Hermes sharing this session: that Hermes owns it
         groups = {daemon_pid} | {os.getpgid(c.pid) for c in psutil.Process(daemon_pid).children()}  # windows-footgun: ok — posix-only
     except (OSError, ValueError, psutil.Error) as exc:
         _bt.logger.debug("No agent-browser daemon to supervise for %s: %s", session_name, exc)
@@ -685,16 +693,17 @@ def _own_local_daemon(session_name: str) -> None:
         owned |= new
     if new:
         own_process_groups(sorted(new))
-        register_child(daemon_pid, "agent-browser-daemon")
+        if not known:
+            register_child(daemon_pid, "agent-browser-daemon")
 
 
-def _release_owned_daemon(session_name: str) -> None:
+def _release_owned_daemon(session_name: str, *, timeout: float = 1.0) -> None:
     """Forget the groups registered for ``session_name`` once its daemon was torn down."""
     with _owned_session_groups_lock:
         groups = _owned_session_groups.pop(session_name, None)
     for pgid in sorted(groups or ()):
         # A daemon or Chromium the teardown failed to kill keeps its group covered.
-        release_process_group_once_empty(pgid)
+        release_process_group_once_empty(pgid, timeout=timeout)
 
 
 def _kill_verified_daemon(socket_dir: str, session_name: str) -> bool:
