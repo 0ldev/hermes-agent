@@ -5,6 +5,7 @@ Split out of ``tools/browser_tool.py``. Facade-owned state is read through ``_bt
 """
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_cli.process_identity import spawn_env
+from hermes_cli.process_identity import registering_meanwhile, spawn_env
 from hermes_constants import hermes_home_key
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
@@ -781,6 +782,13 @@ def _browser_command_preflight() -> dict[str, Any]:
     return {"browser_cmd": browser_cmd}
 
 
+def _owns_local_daemon(command: str, session_info: dict[str, Any]) -> bool:
+    """Whether ``command`` runs on an agent-browser daemon this process launches locally (not attached
+    to a CDP endpoint or a cloud session), which goes to the owner-death supervisor."""
+    return (command != "close" and bool((session_info.get("features") or {}).get("local"))
+            and not session_info.get("cdp_url") and not session_info.get("bb_session_id"))
+
+
 def _spawn_and_collect(
     task_id: str, session_info: dict[str, Any], cmd_parts: list[str],
     command: str, engine: str, timeout: int, stdin_payload: Optional[bytes] = None,
@@ -813,8 +821,13 @@ def _spawn_and_collect(
     cmd_parts, browser_env = _sandbox_wrap(cmd_parts, browser_env, task_socket_dir)
     proc = _popen_agent_browser(cmd_parts, browser_env, task_socket_dir, command, stdin_payload)
 
+    # The first command forks the daemon and Chromium and may run long (navigation): own them as soon
+    # as they publish their pid, so a Hermes killed mid-command takes them along.
+    owning = (registering_meanwhile(lambda: _lifecycle._own_local_daemon(session_info.get("session_name", "")))
+              if _owns_local_daemon(command, session_info) else contextlib.nullcontext())
     try:
-        proc.wait(timeout=timeout)
+        with owning:
+            proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
@@ -968,8 +981,7 @@ def _run_browser_command(
         # the same way and retry once on the replacement before handing the caller the error.
         # ``close`` is exempt: a dead daemon is already closed, and cleanup must never spawn
         # a fresh session just to close it.
-        if command != "close" and (session_info.get("features") or {}).get("local") \
-                and not session_info.get("cdp_url") and not session_info.get("bb_session_id"):
+        if _owns_local_daemon(command, session_info):
             _lifecycle._own_local_daemon(session_info.get("session_name", ""))
         if attempt == 0 and command != "close" and _is_recoverable_local_backend_failure(session_info, result):
             _bt.logger.warning("browser '%s' failed at the backend level (task=%s, rc=%s); recycling the session "

@@ -198,3 +198,40 @@ def test_a_daemon_another_live_hermes_started_is_never_registered(tmp_path, sess
     finally:
         other_hermes.stdin.close()
         other_hermes.wait(timeout=10)
+
+
+def test_a_long_first_agent_browser_command_owns_its_daemon_before_it_returns(tmp_path, monkeypatch):
+    """The first command forks the daemon and Chromium and may navigate for a long time. They must
+    reach the supervisor during that command, or a Hermes killed mid-command leaves them running."""
+    import threading
+    from tools import browser_tool_session as bt_session
+
+    owned_during_call = threading.Event()
+    running = threading.Event()
+    monkeypatch.setattr(lifecycle, "_own_local_daemon",
+                        lambda name: running.is_set() and name == "s" and owned_during_call.set())
+
+    class _Proc:
+        returncode = 0
+
+        def wait(self, timeout=None):
+            running.set()
+            owned_during_call.wait(10)
+            running.clear()
+            return 0
+
+    sock = tmp_path / "sock"
+    sock.mkdir()
+    (sock / "_stdout_open").write_text('{"success": true, "data": {}}', encoding="utf-8")
+    (sock / "_stderr_open").write_text("", encoding="utf-8")
+    monkeypatch.setattr(bt_session, "_prepare_session_socket_dir", lambda name: str(sock))
+    monkeypatch.setattr(bt_session, "_ensure_screen_for_headed_chromium", lambda: None)
+    monkeypatch.setattr(bt_session, "_agent_browser_command_env", lambda d: {})
+    monkeypatch.setattr(bt_session, "_apply_chromium_sandbox_args", lambda env: None)
+    monkeypatch.setattr(bt_session, "_sandbox_wrap", lambda parts, env, d: (parts, env))
+    monkeypatch.setattr(bt_session, "_popen_agent_browser", lambda *a: _Proc())
+
+    info = {"session_name": "s", "cdp_url": None, "features": {"local": True}}
+    result = bt_session._spawn_and_collect("t", info, ["agent-browser", "open"], "open", "chrome", 30)
+    assert result.get("success"), result
+    assert owned_during_call.is_set(), "the daemon was only owned after the command returned"
