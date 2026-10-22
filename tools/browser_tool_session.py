@@ -5,7 +5,6 @@ Split out of ``tools/browser_tool.py``. Facade-owned state is read through ``_bt
 """
 
 import base64
-import contextlib
 import json
 import logging
 import os
@@ -16,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_cli.process_identity import registering_meanwhile, spawn_env
+from hermes_cli.process_identity import spawn_env
 from hermes_constants import hermes_home_key
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
@@ -782,6 +781,10 @@ def _browser_command_preflight() -> dict[str, Any]:
     return {"browser_cmd": browser_cmd}
 
 
+# How often a running local command re-checks for the daemon and Chromium its first command starts.
+_OWN_DURING_COMMAND_S = 0.5
+
+
 def _owns_local_daemon(command: str, session_info: dict[str, Any]) -> bool:
     """Whether ``command`` runs on an agent-browser daemon this process launches locally (not attached
     to a CDP endpoint or a cloud session), which goes to the owner-death supervisor."""
@@ -823,11 +826,17 @@ def _spawn_and_collect(
 
     # The first command forks the daemon and Chromium and may run long (navigation): own them as soon
     # as they publish their pid, so a Hermes killed mid-command takes them along.
-    owning = (registering_meanwhile(lambda: _lifecycle._own_local_daemon(session_info.get("session_name", "")))
-              if _owns_local_daemon(command, session_info) else contextlib.nullcontext())
+    owning = None
+    if _owns_local_daemon(command, session_info):
+        from agent.periodic_scheduler import schedule
+        owning = schedule(lambda: _lifecycle._own_local_daemon(session_info.get("session_name", "")),
+                          _OWN_DURING_COMMAND_S)
     try:
-        with owning:
+        try:
             proc.wait(timeout=timeout)
+        finally:
+            if owning is not None:
+                owning.cancel(wait=5)  # an in-flight check finishes before the caller's own runs
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
