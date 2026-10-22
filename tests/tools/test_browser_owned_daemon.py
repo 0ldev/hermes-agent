@@ -159,8 +159,8 @@ def test_a_sigkilled_owner_takes_daemon_and_chromium_with_it(tmp_path):
                 try:
                     os.killpg(g, 0)  # windows-footgun: ok — posix-marked
                     alive.append(g)
-                except ProcessLookupError:
-                    pass
+                except (ProcessLookupError, PermissionError):
+                    pass  # macOS answers EPERM for a group left with only unreaped zombies
             return alive
 
         wait_until(lambda: not _alive_groups(), timeout=15,
@@ -169,7 +169,7 @@ def test_a_sigkilled_owner_takes_daemon_and_chromium_with_it(tmp_path):
         for g in groups:
             try:
                 os.killpg(g, 9)  # windows-footgun: ok — posix-marked
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
         if owner.poll() is None:
             owner.kill()

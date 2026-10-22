@@ -675,9 +675,9 @@ def _own_local_daemon(session_name: str) -> None:
     with _owned_session_groups_lock:
         known = daemon_pid in _owned_session_groups.get(session_name, ())
     try:
+        if os.getpgid(daemon_pid) != daemon_pid:  # windows-footgun: ok — posix-only, returned above
+            return  # not a group leader (a recycled pid behind a stale pid file, even when known)
         if not known:
-            if os.getpgid(daemon_pid) != daemon_pid:  # windows-footgun: ok — posix-only, returned above
-                return
             if not _verify_reapable_browser_daemon(daemon_pid, socket_dir, session_name):
                 return
             if not spawned_by_this_process(daemon_pid):
