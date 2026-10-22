@@ -75,6 +75,11 @@ def _stop_harness() -> None:
     stop_harness_daemons()
 
 
+def _stop_owned_harness() -> None:
+    from tools.browser_use_cli import stop_owned_harness_daemons
+    stop_owned_harness_daemons()
+
+
 def _emergency_cleanup_all_sessions():
     """atexit: close this process's sessions, then sweep orphans left by crashed
     hermes processes — every clean exit reaps accumulated orphans, not only
@@ -107,9 +112,10 @@ def _emergency_cleanup_all_sessions():
                 _bt._recording_sessions.clear()
     # Lightpanda servers we spawned that fell out of ``_active_sessions``.
     _best_effort("Lightpanda cleanup on exit", _stop_all_lightpanda)
-    # Browser Use harness daemons we drove: a browser_exec-only process never populates
-    # ``_active_sessions``, so cleanup_all_browsers above never ran for them.
-    _best_effort("Browser Use harness daemon stop on exit", _stop_harness)
+    # Browser Use harness daemons we started: a browser_exec-only process never populates
+    # ``_active_sessions``, so cleanup_all_browsers above never ran for them. Only our own: a daemon
+    # another live Hermes started on the same name keeps serving it.
+    _best_effort("Browser Use harness daemon stop on exit", _stop_owned_harness)
     # Safe even if we never used the browser — owner_pid liveness protects daemons
     # owned by other live hermes processes.
     _best_effort("Orphan reap on exit", _reap_orphaned_browser_sessions)
