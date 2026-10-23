@@ -139,7 +139,7 @@ def _resolve_budget_fallback(
                 _turn_exit_reason, True, interrupted,
             )
         return (
-            final_response or "Conversation usage limit reached. Stopped before the next iteration; completed work is retained in the conversation.",
+            final_response or getattr(agent, "_usage_limit_message", None) or "Usage limit reached.",
             _turn_exit_reason, False, interrupted,
         )
     budget_exhausted = (

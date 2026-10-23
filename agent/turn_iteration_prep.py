@@ -401,11 +401,13 @@ def begin_iteration(
         return _verdict("break")
 
     if _usage_tracker is not None:
-        breach = _usage_tracker.check(getattr(agent, "session_total_tokens", 0))
+        breach = _usage_tracker.check(getattr(agent, "session_total_tokens", 0),
+                                      getattr(agent, "session_estimated_cost_usd", 0.0))
         if breach is not None:
             _turn_exit_reason = breach.code
-            if not agent.quiet_mode:
-                agent._safe_print(breach.message)
+            # The finalizer returns this as the turn's reply, so every surface (gateway, Desktop,
+            # cron) says which limit stopped the turn and how to raise it.
+            agent._usage_limit_message = breach.message
             return _verdict("break")
 
     api_call_count += 1
